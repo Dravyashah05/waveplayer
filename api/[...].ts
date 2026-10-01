@@ -6,8 +6,9 @@
 // opaque 500. So:
 //  1. /api/saavn is handled inline here with zero app dependencies — search,
 //     browse and radio keep working even if the main app module fails.
-//  2. The express app is lazy-imported per invocation; load failures become
-//     a JSON 503 with a reason instead of an opaque 500.
+//  2. The express app is lazy-imported per invocation; load failures fall back
+//     to graceful inline handlers (lyrics → oEmbed+lrclib, auth → disconnected)
+//     instead of an opaque 500/503.
 //  3. URL normalization doesn't depend on `req.query.path` being present.
 
 const SAAVN_TIMEOUT_MS = 12000;
@@ -77,6 +78,78 @@ function normalizeUrl(req: any): string {
   return pathname;
 }
 
+function parseLRCInline(lrc: string): Array<{ time: number; text: string }> {
+  const lines: Array<{ time: number; text: string }> = [];
+  const regex = /\[(\d+):(\d+)\.(\d+)\](.*)/;
+  for (const raw of String(lrc || '').split('\n')) {
+    const m = raw.match(regex);
+    if (!m) continue;
+    const time = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + parseInt(m[3].padEnd(2, '0').slice(0, 2), 10) / 100;
+    const text = m[4].trim();
+    if (text) lines.push({ time, text });
+  }
+  lines.sort((a, b) => a.time - b.time);
+  return lines.filter((l) => l.text && !/^(probe|instrumental)$/i.test(l.text.trim()));
+}
+
+// Zero-dependency lyrics fallback: oEmbed (title/artist) + lrclib. Used only
+// when the full express app fails to load, so lyrics degrades to 200 with
+// plain/synced data (or empty) instead of a 503 console error.
+async function handleLyricsInline(pathname: string, res: any) {
+  const id = pathname.split('/').pop() || '';
+  if (!/^[a-zA-Z0-9_-]{11}$/.test(id)) {
+    res.status(400).json({ error: 'invalid videoId' });
+    return;
+  }
+  res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 3000);
+    const r = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`, { signal: ctrl.signal, headers: { 'User-Agent': 'WavePlayer/1.0' } });
+    clearTimeout(t);
+    if (!r.ok) {
+      res.json({ synced: null, plain: null, lyrics: null, source: null, artist: '', track: '', duration: 0 });
+      return;
+    }
+    const j: any = await r.json();
+    const title = String(j.title || '').trim();
+    const author = String(j.author_name || '').trim();
+    if (!title) {
+      res.json({ synced: null, plain: null, lyrics: null, source: null, artist: author, track: title, duration: 0 });
+      return;
+    }
+    const params = new URLSearchParams({ track_name: title });
+    if (author) params.set('artist_name', author);
+    const lctrl = new AbortController();
+    const lt = setTimeout(() => lctrl.abort(), 4000);
+    const lr = await fetch(`https://lrclib.net/api/get?${params.toString()}`, { signal: lctrl.signal, headers: { 'User-Agent': 'WavePlayer/1.0' } });
+    clearTimeout(lt);
+    if (!lr.ok) {
+      res.json({ synced: null, plain: null, lyrics: null, source: null, artist: author, track: title, duration: 0 });
+      return;
+    }
+    const data: any = await lr.json();
+    if (data?.syncedLyrics) {
+      const synced = parseLRCInline(String(data.syncedLyrics));
+      if (synced.length >= 3) {
+        const plain = data.plainLyrics ? String(data.plainLyrics).split('\n').map((s: string) => s.trim()).filter(Boolean) : null;
+        res.json({ synced, plain, lyrics: plain, source: 'lrclib', artist: author, track: title, duration: 0 });
+        return;
+      }
+    }
+    if (data?.plainLyrics) {
+      const plain = String(data.plainLyrics).split('\n').map((s: string) => s.trim()).filter(Boolean);
+      if (plain.join(' ').length >= 20) {
+        res.json({ synced: null, plain, lyrics: plain, source: 'lrclib-plain', artist: author, track: title, duration: 0 });
+        return;
+      }
+    }
+    res.json({ synced: null, plain: null, lyrics: null, source: null, artist: author, track: title, duration: 0 });
+  } catch {
+    try { res.json({ synced: null, plain: null, lyrics: null, source: null, artist: '', track: '', duration: 0 }); } catch {}
+  }
+}
+
 export default async function handler(req: any, res: any) {
   let pathname = '/';
   try {
@@ -96,7 +169,19 @@ export default async function handler(req: any, res: any) {
   } catch (e: any) {
     console.error('[api] app load/handle failed:', String(e?.message || e).slice(0, 300));
     try {
-      if (!res.headersSent) res.status(503).json({ error: 'API_INIT_FAILED' });
+      if (res.headersSent) return;
+      // Graceful degradation instead of 503 noise:
+      // - lyrics: answer inline (frontend falls back to direct lrclib anyway)
+      // - auth status: answer disconnected (GoogleAccountCard handles it)
+      if (pathname.startsWith('/api/ytmusic/lyrics/')) {
+        await handleLyricsInline(pathname, res);
+        return;
+      }
+      if (pathname === '/api/auth/me' || pathname === '/api/auth/youtube/status') {
+        res.json({ connected: false, user: null, youtubeConnected: false, scopes: [] });
+        return;
+      }
+      res.status(503).json({ error: 'API_INIT_FAILED' });
     } catch {}
   }
 }

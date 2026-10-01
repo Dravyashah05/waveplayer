@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import YTMusic from 'ytmusic-api';
 import { resolveYouTubeAudio, YOUTUBE_VIDEO_ID } from './youtubeStream';
@@ -95,7 +96,7 @@ async function fetchLrclibSynced(artist: string, track: string, album: string, d
     for (const url of urls) {
       try {
         const controller = new AbortController();
-        const t = setTimeout(() => controller.abort(), 4000);
+        const t = setTimeout(() => controller.abort(), 2500);
         const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'WavePlayer/1.0' } });
         clearTimeout(t);
         if (!res.ok) continue;
@@ -118,10 +119,13 @@ async function fetchLrclibSynced(artist: string, track: string, album: string, d
     trackClean,
     `${trackClean} ${artist}`.trim(),
   ].filter((v, i, arr) => v && arr.indexOf(v) === i);
-  for (const qRaw of queries) {
+  for (const qRaw of queries.slice(0, 2)) {
     try {
       const q = encodeURIComponent(qRaw);
-      const res = await fetch(`https://lrclib.net/api/search?q=${q}`, { headers: { 'User-Agent': 'WavePlayer/1.0' } });
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 2500);
+      const res = await fetch(`https://lrclib.net/api/search?q=${q}`, { signal: controller.signal, headers: { 'User-Agent': 'WavePlayer/1.0' } });
+      clearTimeout(t);
       if (!res.ok) continue;
       const arr: any[] = await res.json();
       if (!Array.isArray(arr) || !arr.length) continue;
@@ -249,43 +253,65 @@ app.get('/api/ytmusic/song/:id', async (req, res) => {
 });
 
 // --- REDESIGNED LYRICS endpoint: synced via lrclib + ytmusic plain fallback — resilient to YTMusic offline ---
+// Serverless budget: Vercel Hobby kills functions at ~10s, so the whole flow
+// must finish fast. YTMusic init + oEmbed run IN PARALLEL (not sequentially),
+// and every stage is tightly time-boxed.
 app.get('/api/ytmusic/lyrics/:id', async (req,res)=>{
   const id=req.params.id;
   if (!/^[a-zA-Z0-9_-]{11}$/.test(id)) return res.status(400).json({ error: 'invalid videoId' });
+  // Cache at the edge: lyrics never change, repeat views shouldn't re-hit upstream.
+  res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
   try {
-    let song: any = null;
     let ytmLyrics: any = null;
     let artist = '';
     let track = '';
     let album = '';
     let duration = 0;
 
-    // Try YTMusic for metadata + plain lyrics, but don't fail whole request if offline (ENOTFOUND)
-    // Time-boxed: YTMusic init + getSong can hang for 20s+ from datacenter IPs.
-    try {
-      const ytmWork = (async () => {
+    const ytmWork = (async () => {
+      try {
         const yt = await getYTMusic();
         const [s, l] = await Promise.all([
           yt.getSong(id).catch(() => null),
           yt.getLyrics(id).catch(() => null),
         ]);
         return { s, l } as const;
-      })();
-      const { s, l } = await withTimeout(ytmWork, 9000, { s: null, l: null });
-      song = s;
-      ytmLyrics = l;
-      artist = String(song?.artist?.name || (song as any)?.author || '').trim();
-      track = String(song?.name || (song as any)?.title || '').trim();
-      album = String((song as any)?.album?.name || '').trim();
-      duration = Number((song as any)?.duration || 0);
-    } catch (e:any) {
-      console.error('[YTMusic] lyrics ytmusic offline, will use oEmbed + lrclib:', shortError(e));
+      } catch {
+        return { s: null, l: null } as const;
+      }
+    })();
+    const oembedWork = (async () => {
+      try {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 3000);
+        const r = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`, { signal: controller.signal, headers: { 'User-Agent': 'WavePlayer/1.0' } });
+        clearTimeout(t);
+        if (!r.ok) return null;
+        const j: any = await r.json();
+        return { title: String(j.title || '').trim(), author: String(j.author_name || '').trim() };
+      } catch {
+        return null;
+      }
+    })();
+
+    // Parallel metadata: YTMusic gets 4.5s, oEmbed races alongside (3s internal).
+    const [{ s: song, l }, oembed] = await Promise.all([
+      withTimeout(ytmWork, 4500, { s: null, l: null }),
+      withTimeout(oembedWork, 3500, null),
+    ]);
+    ytmLyrics = l;
+    artist = String((song as any)?.artist?.name || (song as any)?.author || '').trim();
+    track = String((song as any)?.name || (song as any)?.title || '').trim();
+    album = String((song as any)?.album?.name || '').trim();
+    duration = Number((song as any)?.duration || 0);
+    if ((!artist && !track) && oembed?.title) {
+      artist = oembed.author || '';
+      track = oembed.title || '';
     }
 
-    // Try lrclib with whatever metadata we have
-    let lrclib: { synced: Array<{ time: number; text: string }> | null; plain: string[] | null; source: string | null } = { synced: null, plain: null, source: null };
+    // Single lrclib lookup with a tight budget.
     if (artist || track) {
-      lrclib = await withTimeout(fetchLrclibSynced(artist, track, album, duration), 14000, lrclib);
+      const lrclib = await withTimeout(fetchLrclibSynced(artist, track, album, duration), 6000, { synced: null, plain: null, source: null });
       if (lrclib.synced?.length) {
         return res.json({ synced: lrclib.synced, plain: lrclib.plain || ytmLyrics || null, lyrics: ytmLyrics || lrclib.plain || null, source: lrclib.source, artist, track, duration });
       }
@@ -293,36 +319,13 @@ app.get('/api/ytmusic/lyrics/:id', async (req,res)=>{
       if (plain && plain.length) {
         return res.json({ synced: null, plain, lyrics: plain, source: lrclib.source || 'ytmusic', artist, track, duration });
       }
-    }
-
-    // Fallback: oEmbed for title/author when YTMusic gave nothing
-    try {
-      const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 4000);
-      const r = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`, { signal: controller.signal, headers: { 'User-Agent': 'WavePlayer/1.0' } });
-      clearTimeout(t);
-      if (r.ok) {
-        const j: any = await r.json();
-        const fallbackTitle = String(j.title || '').trim();
-        const fallbackArtist = String(j.author_name || '').trim();
-        if (fallbackTitle) {
-          const fallback = await withTimeout(fetchLrclibSynced(fallbackArtist, fallbackTitle, '', 0), 12000, { synced: null, plain: null, source: null });
-          if (fallback.synced?.length) return res.json({ synced: fallback.synced, plain: fallback.plain, lyrics: fallback.plain, source: fallback.source, artist: fallbackArtist || artist, track: fallbackTitle || track, duration: 0 });
-          if (fallback.plain?.length) return res.json({ synced: null, plain: fallback.plain, lyrics: fallback.plain, source: fallback.source, artist: fallbackArtist || artist, track: fallbackTitle || track, duration: 0 });
-          // still return title so frontend can show something rather than empty
-          if (!artist && !track) {
-            artist = fallbackArtist;
-            track = fallbackTitle;
-          }
-        }
+      if (Array.isArray(ytmLyrics) && ytmLyrics.length) {
+        return res.json({ synced: null, plain: ytmLyrics, lyrics: ytmLyrics, source: 'ytmusic', artist, track, duration });
       }
-    } catch {}
-
-    // Last resort: if we have any lrclib plain or ytmusic plain, return it, else still return with artist/track so frontend can show header
-    const plain = (lrclib.plain && lrclib.plain.length ? lrclib.plain : Array.isArray(ytmLyrics) ? ytmLyrics : null);
-    if (plain && plain.length) {
-      return res.json({ synced: null, plain, lyrics: plain, source: lrclib.source || 'ytmusic', artist, track, duration });
+    } else if (Array.isArray(ytmLyrics) && ytmLyrics.length) {
+      return res.json({ synced: null, plain: ytmLyrics, lyrics: ytmLyrics, source: 'ytmusic', artist, track, duration });
     }
+
     // No lyrics found — return empty but 200 so frontend shows "No lyrics" instead of 500 spinner
     return res.json({ synced: null, plain: null, lyrics: null, source: null, artist, track, duration });
   } catch(e:any){

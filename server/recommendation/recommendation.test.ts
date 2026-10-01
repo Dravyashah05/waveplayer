@@ -178,4 +178,19 @@ describe('autoplay / radio builders (stubbed YTMusic)', () => {
     assert.equal(c.duration, 274);
     assert.ok(c.thumbnails?.includes('hq720.jpg'));
   });
+
+  it('normalizes arbitrary YT Music Home section labels and wrapped song items', async () => {
+    const { homeSectionCandidates } = await import('./candidates.js');
+    const sections = await homeSectionCandidates({
+      ...ytStub,
+      getHomeSections: async () => [
+        { title: 'A title that may change', contents: [{ song: { videoId: '34Na4j8AVgA', title: 'Starboy', artists: 'The Weeknd', duration: '3:50' } }] },
+        { name: 'Another changing label', items: [{ videoId: '4NRXx6U8ABQ', name: 'Blinding Lights', artist: { name: 'The Weeknd' } }] },
+      ],
+    }, 10);
+    assert.equal(sections.length, 2);
+    assert.equal(sections[0].title, 'A title that may change');
+    assert.equal(sections[0].candidates[0].videoId, '34Na4j8AVgA');
+    assert.equal(sections[1].candidates[0].title, 'Blinding Lights');
+  });
 });

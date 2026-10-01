@@ -180,3 +180,26 @@ export async function trendingCandidates(yt: YTMusicLike, limit = 20): Promise<C
   }
   return out;
 }
+
+/** Collect song-like items from every section returned by YT Music Home.
+ * Section labels and item wrappers vary, so do not depend on fixed names. */
+export async function homeSectionCandidates(yt: YTMusicLike, limit = 100): Promise<Array<{ id: string; title: string; subtitle: string; candidates: Candidate[] }>> {
+  const home = (await safe(yt.getHomeSections())) || [];
+  const sections: Array<{ id: string; title: string; subtitle: string; candidates: Candidate[] }> = [];
+  for (const [index, section] of home.entries()) {
+    const items = section?.items || section?.contents || section?.results || [];
+    const candidates = (Array.isArray(items) ? items : [])
+      .map((item: any, rank: number) => toCandidate(item?.video || item?.song || item?.track || item, 'home', rank))
+      .filter((candidate: Candidate | null): candidate is Candidate => !!candidate)
+      .slice(0, limit);
+    if (!candidates.length) continue;
+    const title = String(section?.title || section?.name || `YouTube Music ${index + 1}`).trim();
+    sections.push({
+      id: String(section?.id || `ytmusic-home-${index}`),
+      title,
+      subtitle: String(section?.subtitle || section?.description || 'From YouTube Music'),
+      candidates,
+    });
+  }
+  return sections;
+}

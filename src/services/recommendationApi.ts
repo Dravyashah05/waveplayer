@@ -57,6 +57,9 @@ function tracksOf(data: any): Track[] {
 }
 
 export interface HomeSections {
+  personalized?: boolean;
+  source?: string;
+  personalizationAvailable?: boolean;
   sections: Array<{ id: string; title: string; subtitle: string; tracks: Track[] }>;
 }
 
@@ -65,6 +68,9 @@ export async function fetchRecHome(): Promise<HomeSections | null> {
   const data = await getJson(`${BASE}/home${q ? `?${q}` : ''}`);
   if (!data || !Array.isArray(data.sections)) return null;
   return {
+    personalized: data.personalized === true,
+    source: String(data.source || 'unknown'),
+    personalizationAvailable: data.personalizationAvailable === true,
     sections: data.sections.map((s: any) => ({
       id: String(s.id),
       title: String(s.title),
@@ -72,6 +78,18 @@ export async function fetchRecHome(): Promise<HomeSections | null> {
       tracks: tracksOf(s),
     })),
   };
+}
+
+export async function fetchForYou(): Promise<Track[]> {
+  const q = tasteQuery();
+  const data = await getJson(`${BASE}/for-you${q ? `?${q}` : ''}`);
+  return tracksOf(data);
+}
+
+export async function fetchDiscover(): Promise<Track[]> {
+  const q = tasteQuery();
+  const data = await getJson(`${BASE}/discover${q ? `?${q}` : ''}`);
+  return tracksOf(data);
 }
 
 export async function fetchQuickPicks(limit = 10): Promise<Track[] | null> {

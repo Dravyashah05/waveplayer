@@ -6,7 +6,7 @@
 
 import type { Express, Request, Response } from 'express';
 import type { YTMusicLike } from './candidates.js';
-import { artistCandidates, searchCandidates, toCandidate, trendingCandidates } from './candidates.js';
+import { artistCandidates, homeSectionCandidates, searchCandidates, toCandidate, trendingCandidates } from './candidates.js';
 import { buildAutoplay, buildRadio, buildSimilar, toResolvedTrack } from './autoplay.js';
 import { diversify } from './diversity.js';
 import { rankCandidates } from './ranker.js';
@@ -66,18 +66,17 @@ export function registerRecommendationRoutes(app: Express, getYt: () => Promise<
     }
   }
 
-  // Personalized home — sections composed from YTMusic relations + taste hints.
+  // Home uses the available YT Music Home feed plus Wave taste hints. The
+  // current ytmusic-api client is anonymous, so this is not account-personalized.
   app.get('/api/recommendations/home', async (req, res) => {
     const cacheKey = `home:${String(req.query.artists || '')}:${String(req.query.lang || '')}`;
     const hit = cacheGet(cacheKey);
     if (hit) return res.json(hit);
     try {
       const ytm = await yt();
-      if (!ytm) return res.json({ sections: [] });
+      if (!ytm) return res.json({ personalized: false, source: 'wave-fallback', personalizationAvailable: false, sections: [] });
       const taste = tasteOf(req);
       const sections: Array<{ id: string; title: string; subtitle: string; tracks: ResolvedTrack[] }> = [];
-
-      const trending = (await timed(trendingCandidates(ytm, 20), 9000)) || [];
       const push = (id: string, title: string, subtitle: string, pool: Candidate[], limit = 10) => {
         const ranked = rankCandidates(pool, { seed: null, taste });
         ranked.sort((a, b) => b.score - a.score);
@@ -85,6 +84,11 @@ export function registerRecommendationRoutes(app: Express, getYt: () => Promise<
         if (picked.length) sections.push({ id, title, subtitle, tracks: picked.map((s) => toResolvedTrack(s.candidate)) });
       };
 
+      const home = (await timed(homeSectionCandidates(ytm, 30), 10000)) || [];
+      for (const section of home) {
+        push(section.id, section.title, section.subtitle, section.candidates, 12);
+      }
+      const trending = (await timed(trendingCandidates(ytm, 30), 9000)) || [];
       push('quick-picks', 'Quick Picks', 'Jump back in', trending, 10);
       if (taste.artists.length) {
         const fav = taste.artists[0];
@@ -105,14 +109,34 @@ export function registerRecommendationRoutes(app: Express, getYt: () => Promise<
       );
       push('trending', 'Trending for you', 'What is hot now', trending, 10);
 
-      const payload = { sections };
+      const payload = { personalized: false, source: 'ytmusic-public', personalizationAvailable: false, sections };
       cacheSet(cacheKey, payload);
       res.json(payload);
     } catch (e: any) {
       console.error('[Rec] home error:', shortError(e));
-      res.json({ sections: [] });
+      res.json({ personalized: false, source: 'wave-fallback', personalizationAvailable: false, sections: [] });
     }
   });
+
+  const collectionHandler = (relation: 'for-you' | 'discover') => async (req: Request, res: Response) => {
+    try {
+      const ytm = await yt();
+      if (!ytm) return res.json({ personalized: false, source: 'wave-fallback', tracks: [] });
+      const taste = tasteOf(req);
+      const home = await timed(homeSectionCandidates(ytm, 40), 10000) || [];
+      const candidates = home.flatMap((section) => section.candidates);
+      const pool = candidates.length ? candidates : (await timed(trendingCandidates(ytm, 30), 9000) || []);
+      const ordered = rankCandidates(pool, { seed: null, taste }).sort((a, b) => b.score - a.score);
+      const tracks = diversify(ordered, 20, { artistCap: relation === 'discover' ? 1 : 2, albumCap: 2 })
+        .map((entry) => toResolvedTrack(entry.candidate));
+      res.json({ personalized: false, source: 'ytmusic-public', tracks });
+    } catch (e: any) {
+      console.error(`[Rec] ${relation} error:`, shortError(e));
+      res.json({ personalized: false, source: 'wave-fallback', tracks: [] });
+    }
+  };
+  app.get('/api/recommendations/for-you', collectionHandler('for-you'));
+  app.get('/api/recommendations/discover', collectionHandler('discover'));
 
   app.get('/api/recommendations/quick-picks', async (req, res) => {
     const cacheKey = `qp:${String(req.query.artists || '')}:${String(req.query.lang || '')}`;

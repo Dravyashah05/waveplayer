@@ -20,7 +20,7 @@ import { Track, Album, Playlist, SearchArtist } from '../types';
 import { playerStore } from '../services/playerStore';
 import { getSaavnBrowseModules, searchSaavnArtists } from '../services/saavnApi';
 import { recommendTracks, getSimilarTracks, getDiscoverTracks } from '../services/recommendationEngine';
-import { fetchQuickPicks, fetchRadio } from '../services/recommendationApi';
+import { fetchQuickPicks, fetchRadio, fetchRecHome } from '../services/recommendationApi';
 import { getProfile } from '../services/userProfile';
 
 function getGreeting() {
@@ -133,6 +133,7 @@ export const HomePage: React.FC<{
   const [trendingForYou, setTrendingForYou] = useState<Track[]>([]);
   const [youMayLike, setYouMayLike] = useState<Track[]>([]);
   const [quickPicks, setQuickPicks] = useState<Track[]>([]);
+  const [recommendationSections, setRecommendationSections] = useState<Array<{ id: string; title: string; subtitle: string; tracks: Track[] }>>([]);
   const [startingRadio, setStartingRadio] = useState(false);
 
   const startRadio = async (seed: Track | null) => {
@@ -204,13 +205,17 @@ export const HomePage: React.FC<{
       try {
         // Quick Picks — server endpoint (YouTube Music relations + taste),
         // falling back to the on-device engine when offline/unreachable.
-        const qp = await fetchQuickPicks(10).catch(() => null);
+        const [qp, homeRecommendations] = await Promise.all([
+          fetchQuickPicks(10).catch(() => null),
+          fetchRecHome().catch(() => null),
+        ]);
         if (!cancelled) {
           if (qp && qp.length) setQuickPicks(qp);
           else {
             const fallback = await recommendTracks({ seedTrack: seed, limit: 10, weights: { taste: 0.4, similarity: 0.2, collaborative: 0.15, popularity: 0.15, discovery: 0.1 } }).catch(() => [] as Track[]);
             setQuickPicks(fallback as Track[]);
           }
+          setRecommendationSections((homeRecommendations?.sections || []).filter((section) => section.tracks.length));
         }
         // Made For You — full hybrid (taste 35%, similarity 25%, collab 20%, pop 10%, discovery 10%)
         const madeForYou = await recommendTracks({ seedTracks: seedPool, limit: 12 }).catch(() => []);
@@ -438,6 +443,21 @@ export const HomePage: React.FC<{
           </div>
         </div>
       )}
+
+      {/* Quick Picks — YouTube Music relations + taste, one-tap play */}
+      {recommendationSections.filter((section) => !['quick-picks', 'your-mix', 'because', 'discover', 'trending'].includes(section.id)).map((section) => (
+        <div key={`yt-home-${section.id}`} className="space-y-3.5">
+          <RailHeader title={section.title} subtitle={section.subtitle} icon={<Sparkles className="h-3.5 w-3.5 text-amber-400" />} actionText="Play all" onAction={() => onPlay(section.tracks[0], section.tracks)} />
+          <div className="flex gap-3.5 sm:gap-4 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-none snap-x">
+            {section.tracks.map((t) => (
+              <div key={`${section.id}-${t.id}`} onClick={() => onPlay(t, section.tracks)} className="snap-start group cursor-pointer min-w-[155px] w-[155px] shrink-0">
+                <div className="relative aspect-square overflow-hidden rounded-[18px] bg-[#18181b] ring-1 ring-white/[0.08]"><img src={t.thumbnail} alt={t.title} loading="lazy" className="h-full w-full object-cover group-hover:scale-105 transition-transform" referrerPolicy="no-referrer" /><div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"><div className="h-10 w-10 rounded-full bg-white text-black grid place-items-center"><Play className="h-4 w-4 fill-current ml-0.5" /></div></div></div>
+                <p className="truncate text-[13px] font-bold text-white mt-2">{t.title}</p><p className="truncate text-[11.5px] text-[#8e8e93]">{t.author}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
 
       {/* Quick Picks — YouTube Music relations + taste, one-tap play */}
       {quickPicks.length > 0 && (

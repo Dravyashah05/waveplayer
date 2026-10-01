@@ -71,6 +71,39 @@ class PlayerStore {
     this.emit();
   }
 
+  playNext(track: Track) {
+    if (!track?.id) return;
+    const existingIdx = this.tracks.findIndex((t) => t.id === track.id);
+    if (existingIdx !== -1) {
+      this.tracks.splice(existingIdx, 1);
+      if (existingIdx < this.index) this.index--;
+    }
+    const insertIdx = this.index >= 0 ? this.index + 1 : 0;
+    this.tracks.splice(insertIdx, 0, track);
+    if (this.index === -1) this.index = 0;
+    logEvent({ songId: track.id, track, event: 'add_to_queue', playedSeconds: 0, duration: track.durationSeconds || 0, meta: { playNext: true } });
+    this.bump();
+    this.rebuildShuffle();
+    this.persistQueue();
+    this.emit();
+  }
+
+  addMultipleToQueue(tracks: Track[]) {
+    if (!tracks.length) return;
+    const existing = new Set(this.tracks.map((t) => t.id));
+    const toAdd = tracks.filter((t) => t?.id && !existing.has(t.id));
+    if (!toAdd.length) return;
+    this.tracks.push(...toAdd);
+    for (const t of toAdd) {
+      logEvent({ songId: t.id, track: t, event: 'add_to_queue', playedSeconds: 0, duration: t.durationSeconds || 0 });
+    }
+    if (this.index === -1) this.index = 0;
+    this.bump();
+    this.rebuildShuffle();
+    this.persistQueue();
+    this.emit();
+  }
+
   removeFromQueue(idx: number) {
     if (idx < 0 || idx >= this.tracks.length) return;
     this.tracks.splice(idx, 1);

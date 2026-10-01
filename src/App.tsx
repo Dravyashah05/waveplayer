@@ -232,11 +232,12 @@ function AppContent() {
     if (page === 'artist') return <ArtistPage artistId={pageParam} onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} onBack={goBack} />;
     if (page === 'album') return <AlbumPage albumId={pageParam} onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} onBack={goBack} />;
     if (page === 'playlist') return <PlaylistPage playlistId={pageParam} onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} onBack={goBack} />;
-    if (page === 'playlists') return <LibraryPage onPlay={playTrack} initialTab="playlists" />;
-    if (page === 'albums') return <LibraryPage onPlay={playTrack} initialTab="albums" />;
-    if (page === 'artists') return <LibraryPage onPlay={playTrack} initialTab="artists" />;
-    if (page === 'liked') return <LibraryPage onPlay={playTrack} initialTab="favs" />;
-    if (page === 'history') return <LibraryPage onPlay={playTrack} initialTab="songs" />;
+    if (page === 'playlists') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="playlists" />;
+    if (page === 'albums') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="albums" />;
+    if (page === 'artists') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="artists" />;
+    if (page === 'liked') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="favs" />;
+    if (page === 'history') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="recent" />;
+    if (page === 'songs') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="songs" />;
     return <HomePage onPlay={playTrack} onPlayPlaylist={(id) => navigate('playlist', id)} onNavigate={(p, param) => navigate(p as Page, param)} history={queue.length ? queue : favs.length ? favs : history} />;
   };
 

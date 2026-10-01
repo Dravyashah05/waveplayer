@@ -4,6 +4,16 @@ const SAAVN_TIMEOUT_MS = 12000;
 const SAAVN_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+function sendJson(res: any, statusCode: number, data: unknown) {
+  if (typeof res.status === 'function' && typeof res.json === 'function') {
+    res.status(statusCode).json(data);
+  } else {
+    res.statusCode = statusCode;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(data));
+  }
+}
+
 async function handleSaavnInline(req: any, res: any) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SAAVN_TIMEOUT_MS);
@@ -51,16 +61,6 @@ async function handleSaavnInline(req: any, res: any) {
   }
 }
 
-function sendJson(res: any, statusCode: number, data: unknown) {
-  if (typeof res.status === 'function' && typeof res.json === 'function') {
-    res.status(statusCode).json(data);
-  } else {
-    res.statusCode = statusCode;
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify(data));
-  }
-}
-
 function normalizeUrl(req: any): string {
   const raw = String(req.url || '/');
   const url = new URL(raw, 'https://wave.invalid');
@@ -74,7 +74,7 @@ function normalizeUrl(req: any): string {
     url.searchParams.delete('path');
     pathname = `/api/${pathParts.map((part: string) => encodeURIComponent(part)).join('/')}`;
     req.url = `${pathname}${url.search}`;
-  } else if (pathname === '/api/[...]') {
+  } else if (pathname === '/api/[...]' || pathname === '/api/index' || pathname === '/api') {
     req.url = `/api/${url.search}`;
     pathname = '/api/';
   }

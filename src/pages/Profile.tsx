@@ -2,9 +2,13 @@ import { UserRound, Music2, Heart, Clock, Shield } from 'lucide-react';
 import { playerStore } from '../services/playerStore';
 import { settingsStore } from '../services/settingsStore';
 import { GoogleAccountCard } from '../components/GoogleAccountCard';
+import { useGoogleAccount } from '../hooks/useGoogleAccount';
 import { useState, useEffect } from 'react';
 
+const DEFAULT_AVATAR = 'https://i.pravatar.cc/100?img=12';
+
 export const ProfilePage: React.FC = () => {
+  const { connected, user, youtubeConnected } = useGoogleAccount();
   const favs = playerStore.favsList();
   const history = playerStore.historyList();
   const queue = playerStore.queue();
@@ -26,11 +30,11 @@ export const ProfilePage: React.FC = () => {
   return (
     <div className="space-y-5">
       <div className="rounded-xl border border-white/10 lg-surface p-4 flex items-center gap-4" style={cardStyle}>
-        <img src="https://i.pravatar.cc/100?img=12" alt="Profile" className="h-14 w-14 rounded-full object-cover ring-1 ring-white/20 shadow-[0_4px_12px_rgba(0,0,0,0.3)]" />
-        <div>
-          <h2 className="text-[18px] font-bold text-white leading-none">Wave User</h2>
-          <p className="text-[12px] text-white/60">wave@music.app • Premium</p>
-          <p className="text-[11px] text-white/30">Member since 2024</p>
+        <img src={user?.picture || DEFAULT_AVATAR} alt="Profile" className="h-14 w-14 rounded-full object-cover ring-1 ring-white/20 shadow-[0_4px_12px_rgba(0,0,0,0.3)]" referrerPolicy="no-referrer" />
+        <div className="min-w-0">
+          <h2 className="text-[18px] font-bold text-white leading-none truncate">{user?.name || 'Wave User'}</h2>
+          <p className="text-[12px] text-white/60 truncate">{user ? `${user.email} • Premium` : 'wave@music.app • Premium'}</p>
+          <p className="text-[11px] text-white/30">{connected ? (youtubeConnected ? 'Google • YouTube connected' : 'Google connected') : 'Member since 2024'}</p>
         </div>
       </div>
 

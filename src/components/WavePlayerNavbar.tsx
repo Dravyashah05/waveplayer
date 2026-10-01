@@ -2,6 +2,7 @@ import { Search, X, Clock, TrendingUp, ArrowUpRight, UserRound, Settings2, LogOu
 import { NavOptions } from './NavOptions';
 import { useState, useEffect, useRef } from 'react';
 import { settingsStore } from '../services/settingsStore';
+import { googleLogout, useGoogleAccount } from '../hooks/useGoogleAccount';
 
 interface Props {
   query: string;
@@ -30,6 +31,8 @@ export const WavePlayerNavbar: React.FC<Props> = ({ query, onQueryChange, onSear
   const [glassIntensity, setGlassIntensity] = useState(() => settingsStore.get().glassIntensity);
   const [glassEnabled, setGlassEnabled] = useState(() => settingsStore.get().glassEnabled);
   const profileRef = useRef<HTMLDivElement>(null);
+  const { connected: accountConnected, user: accountUser, reload: reloadAccount } = useGoogleAccount();
+  const signOut = async () => { setProfileOpen(false); await googleLogout(); await reloadAccount(); };
   const inputRef = useRef<HTMLInputElement>(null);
   const desktopInputRef = useRef<HTMLInputElement>(null);
   const searchRefDesktop = useRef<HTMLDivElement>(null);
@@ -272,7 +275,7 @@ export const WavePlayerNavbar: React.FC<Props> = ({ query, onQueryChange, onSear
 
           <div className="relative shrink-0" ref={profileRef}>
             <button onClick={() => setProfileOpen(v => !v)} className="relative flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full overflow-hidden bg-[#1a1a1a] ring-1 ring-white/15 hover:ring-white/25 shadow-[0_4px_16px_rgba(0,0,0,0.2)]">
-              <img src="https://i.pravatar.cc/100?img=12" alt="Profile" className="h-full w-full object-cover" referrerPolicy="no-referrer" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+              <img src={accountUser?.picture || 'https://i.pravatar.cc/100?img=12'} alt="Profile" className="h-full w-full object-cover" referrerPolicy="no-referrer" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
               <span className="absolute inset-0 grid place-items-center bg-[#1a1a1a] text-white/60"><UserRound className="h-4 w-4" /></span>
             </button>
             {profileOpen && (
@@ -292,11 +295,11 @@ export const WavePlayerNavbar: React.FC<Props> = ({ query, onQueryChange, onSear
                   }
                 >
                   <div className="p-4 flex items-center gap-3">
-                    <img src="https://i.pravatar.cc/100?img=12" alt="Profile" className="h-10 w-10 rounded-full object-cover ring-1 ring-white/10" referrerPolicy="no-referrer" />
+                    <img src={accountUser?.picture || 'https://i.pravatar.cc/100?img=12'} alt="Profile" className="h-10 w-10 rounded-full object-cover ring-1 ring-white/10" referrerPolicy="no-referrer" />
                     <div className="min-w-0 flex-1">
-                      <p className="text-[14px] font-bold tracking-[-0.01em] text-white leading-none truncate">Wave User</p>
-                      <p className="text-[12px] font-medium text-white/60 truncate">wave@music.app</p>
-                      <p className="text-[11px] font-medium text-white/30">Premium • Wave</p>
+                      <p className="text-[14px] font-bold tracking-[-0.01em] text-white leading-none truncate">{accountUser?.name || 'Wave User'}</p>
+                      <p className="text-[12px] font-medium text-white/60 truncate">{accountUser?.email || 'wave@music.app'}</p>
+                      <p className="text-[11px] font-medium text-white/30">{accountConnected ? 'Google • Wave' : 'Premium • Wave'}</p>
                     </div>
                   </div>
                   <div className="h-px bg-white/10 mx-4" />
@@ -307,7 +310,7 @@ export const WavePlayerNavbar: React.FC<Props> = ({ query, onQueryChange, onSear
                     <button onClick={() => { setProfileOpen(false); if (onNavigate) onNavigate('settings'); else void 0; }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium text-white hover:bg-white hover:text-black text-left">
                       <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 group-hover:bg-black/10 text-white"><Settings2 className="h-4 w-4" /></span> Settings
                     </button>
-                    <button onClick={() => { setProfileOpen(false); void 0; }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium text-white/60 hover:bg-white/10 hover:text-white text-left">
+                    <button onClick={() => void signOut()} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium text-white/60 hover:bg-white/10 hover:text-white text-left">
                       <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-white/60"><LogOut className="h-4 w-4" /></span> Sign out
                     </button>
                   </div>

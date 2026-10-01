@@ -19,12 +19,15 @@ import {
   CheckCircle2,
   Plus,
   Radio,
+  MoreVertical,
+  ListPlus,
 } from 'lucide-react';
 import { Track, Album } from '../types';
 import { getSaavnAlbumDetails, searchSaavnAlbums, getSaavnBrowseModules } from '../services/saavnApi';
 import { getAlbumDetails } from '../services/ytmusicApi';
 import { deduplicateTracks, deduplicateAlbums } from '../services/searchEngine';
 import { fetchRadio } from '../services/recommendationApi';
+import { recommendTracks } from '../services/recommendationEngine';
 import { playerStore } from '../services/playerStore';
 import { usePlayerEngine } from '../services/playerEngine';
 import { SongRow } from '../components/SongRow';
@@ -47,7 +50,10 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
   const [album, setAlbum] = useState<Album | null>(null);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [recommendedAlbums, setRecommendedAlbums] = useState<Album[]>([]);
+  const [moreLikeThis, setMoreLikeThis] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [moreOpen, setMoreOpen] = useState(false);
   const [isAlbumFav, setIsAlbumFav] = useState(false);
 
   // Discovery / Idle State
@@ -84,9 +90,11 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
   // Multi-source Album loader
   const loadAlbumData = useCallback(async (id: string) => {
     setLoading(true);
+    setLoadError('');
     setAlbum(null);
     setTracks([]);
     setRecommendedAlbums([]);
+    setMoreLikeThis([]);
 
     try {
       // 1. Fetch from JioSaavn & YT Music
@@ -125,6 +133,9 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
       }
 
       const dedupedTracks = deduplicateTracks(rawTracks);
+      if (!resolvedAlbum) {
+        setLoadError('Album not found. It may have been removed or the link is wrong.');
+      }
       setAlbum(resolvedAlbum);
       setTracks(dedupedTracks);
 
@@ -144,8 +155,17 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
           })
           .catch(() => {});
       }
+
+      // More Like This songs (central recommendation engine, seeded by album).
+      if (dedupedTracks.length) {
+        const seeds = dedupedTracks.slice(0, 3);
+        const exclude = new Set(dedupedTracks.map((t) => t.id));
+        recommendTracks({ seedTracks: seeds, excludeIds: exclude, limit: 8 })
+          .then((recs) => setMoreLikeThis(recs.filter((t) => !exclude.has(t.id)).slice(0, 8)))
+          .catch(() => setMoreLikeThis([]));
+      }
     } catch (err) {
-      console.error('[AlbumPage] Error loading album:', err);
+      setLoadError('Something went wrong loading this album. Check your connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -231,6 +251,29 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
     setIsPlaylistModalOpen(true);
   };
 
+  const handleAddAllToQueue = () => {
+    if (!tracks.length) return;
+    let added = 0;
+    for (const t of tracks) {
+      const before = playerStore.queue().length;
+      playerStore.addToQueue(t);
+      if (playerStore.queue().length > before) added++;
+    }
+    setToastMessage(added ? `Added ${added} song${added === 1 ? '' : 's'} to queue` : 'Already in queue');
+  };
+
+  const handleStartRadio = async () => {
+    if (!tracks.length) return;
+    setToastMessage(`Starting radio for "${album?.name || 'this album'}"...`);
+    try {
+      const radio = await fetchRadio(tracks[0], 20);
+      if (radio.length) onPlay(radio[0], radio);
+      else onPlay(tracks[0], tracks);
+    } catch {
+      setToastMessage('Could not start radio');
+    }
+  };
+
   const handleOpenContextMenu = (track: Track, e: React.MouseEvent) => {
     e.stopPropagation();
     setMenuTrack(track);
@@ -271,6 +314,15 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
                 key={a.albumId}
                 whileHover={{ y: -4 }}
                 onClick={() => onNavigate?.('album', a.albumId)}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open album ${a.name}`}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onNavigate?.('album', a.albumId);
+                  }
+                }}
                 className="group relative cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
               >
                 <div className="relative aspect-square w-full overflow-hidden rounded-[16px] bg-[#141416] ring-1 ring-white/10">
@@ -305,9 +357,51 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
   // 2. LOADING STATE
   if (loading && !album) {
     return (
-      <div className="flex h-96 flex-col items-center justify-center gap-3">
-        <Loader2 className="h-9 w-9 animate-spin text-cyan-400" />
-        <p className="text-sm font-semibold text-[#8e8e93]">Loading album tracklist...</p>
+      <div className="space-y-8 pb-24" aria-busy="true" aria-label="Loading album">
+        <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-6 sm:p-8">
+          <div className="flex flex-col sm:flex-row items-center gap-6">
+            <div className="h-[190px] w-[190px] sm:h-[220px] sm:w-[220px] shrink-0 animate-pulse rounded-[24px] bg-white/10" />
+            <div className="flex-1 space-y-3 w-full">
+              <div className="h-9 w-2/3 animate-pulse rounded-lg bg-white/10" />
+              <div className="h-4 w-1/3 animate-pulse rounded-lg bg-white/10" />
+              <div className="flex gap-3 pt-2">
+                <div className="h-11 w-32 animate-pulse rounded-full bg-white/10" />
+                <div className="h-11 w-28 animate-pulse rounded-full bg-white/10" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-2 py-1.5">
+              <div className="h-12 w-12 animate-pulse rounded-xl bg-white/10" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3.5 w-1/2 animate-pulse rounded bg-white/10" />
+                <div className="h-3 w-1/3 animate-pulse rounded bg-white/10" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // 2b. ERROR STATE
+  if (!loading && (loadError || !album)) {
+    return (
+      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-center">
+        <p className="text-[15px] font-bold text-white">{loadError || 'Album not found'}</p>
+        <p className="max-w-[36ch] text-xs text-white/50">Nothing was changed. Check the link or your connection.</p>
+        <div className="flex gap-2 pt-1">
+          {albumId && (
+            <button type="button" onClick={() => void loadAlbumData(albumId)} className="rounded-full bg-white px-5 py-2 text-xs font-bold text-black">
+              Try Again
+            </button>
+          )}
+          <button type="button" onClick={() => (onBack ? onBack() : window.history.back())} className="rounded-full border border-white/10 px-5 py-2 text-xs font-semibold text-white/75">
+            Go Back
+          </button>
+        </div>
       </div>
     );
   }
@@ -439,6 +533,44 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
 
               <button
                 type="button"
+                onClick={() => void handleStartRadio()}
+                disabled={tracks.length === 0}
+                className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-4 text-[13px] font-semibold text-white transition-all active:scale-95 disabled:opacity-50"
+                title="Start album radio"
+              >
+                <Radio className="h-4 w-4 text-cyan-300" /> Radio
+              </button>
+
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setMoreOpen((v) => !v)}
+                  className="flex h-11 w-11 items-center justify-center rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-white transition-all active:scale-95"
+                  title="More actions"
+                  aria-label="More album actions"
+                  aria-expanded={moreOpen}
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </button>
+                {moreOpen && (
+                  <div className="absolute left-0 z-30 mt-2 w-52 overflow-hidden rounded-2xl border border-white/10 bg-[#141416]/98 shadow-[0_24px_64px_rgba(0,0,0,0.85)] backdrop-blur-2xl">
+                    <div className="p-2">
+                      <button type="button" onClick={() => { setMoreOpen(false); handleAddAllToQueue(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white hover:text-black">
+                        <Plus className="h-4 w-4" /> Add album to queue
+                      </button>
+                      <button type="button" onClick={() => { setMoreOpen(false); void handleStartRadio(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white hover:text-black">
+                        <Radio className="h-4 w-4" /> Start album radio
+                      </button>
+                      <button type="button" onClick={() => { setMoreOpen(false); handleShare(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white hover:text-black">
+                        <Share2 className="h-4 w-4" /> Share album
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
                 onClick={handleShare}
                 className="flex h-11 w-11 items-center justify-center rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-white transition-all active:scale-95"
                 title="Share"
@@ -479,7 +611,36 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
       </div>
 
       {/* ======================================================= */}
-      {/* 3. ABOUT / DESCRIPTION */}
+      {/* 3. MORE LIKE THIS SONGS (central recommendation engine) */}
+      {/* ======================================================= */}
+      {moreLikeThis.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2 px-1">
+            <Sparkles className="h-5 w-5 text-amber-400" /> More Like This
+          </h2>
+          <p className="-mt-2 px-1 text-[12px] text-white/45">
+            Because you listened to {album?.artist?.name || 'this album'} • Similar to songs in this album
+          </p>
+          <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-2 divide-y divide-white/[0.04]">
+            {moreLikeThis.map((track, idx) => (
+              <SongRow
+                key={`album-rec-${track.id}-${idx}`}
+                track={track}
+                index={idx}
+                isActive={currentTrack?.id === track.id}
+                isPlaying={isPlaying}
+                onPlay={() => onPlay(track, moreLikeThis)}
+                showAlbum={true}
+                onOpenMenu={handleOpenContextMenu}
+                onNavigate={onNavigate}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================= */}
+      {/* 4. ABOUT / DESCRIPTION */}
       {/* ======================================================= */}
       {album?.description && (
         <div className="rounded-[24px] bg-white/[0.03] border border-white/10 p-6 space-y-2">
@@ -509,6 +670,15 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
                 key={rec.albumId}
                 whileHover={{ y: -4 }}
                 onClick={() => onNavigate?.('album', rec.albumId)}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open album ${rec.name}`}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onNavigate?.('album', rec.albumId);
+                  }
+                }}
                 className="group cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
               >
                 <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">

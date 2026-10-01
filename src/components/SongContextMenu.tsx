@@ -11,6 +11,7 @@ import {
   Disc3,
   Share2,
   Download,
+  Trash2,
   X,
   Sparkles,
 } from 'lucide-react';
@@ -24,6 +25,7 @@ export interface SongContextMenuProps {
   track: Track | null;
   onPlay?: () => void;
   onOpenAddToPlaylist?: (track: Track) => void;
+  onRemoveFromPlaylist?: () => void;
   onNavigate?: (page: string, param?: string) => void;
   onShowToast?: (msg: string) => void;
 }
@@ -34,6 +36,7 @@ export const SongContextMenu: React.FC<SongContextMenuProps> = ({
   track,
   onPlay,
   onOpenAddToPlaylist,
+  onRemoveFromPlaylist,
   onNavigate,
   onShowToast,
 }) => {
@@ -231,6 +234,21 @@ export const SongContextMenu: React.FC<SongContextMenuProps> = ({
               </span>
               Add to playlist
             </button>
+
+            {onRemoveFromPlaylist && (
+              <button
+                onClick={() => {
+                  onClose();
+                  onRemoveFromPlaylist();
+                }}
+                className="flex w-full items-center gap-3.5 rounded-xl px-3.5 py-2.5 text-left text-[13.5px] font-medium text-rose-300 hover:bg-rose-500 hover:text-white transition-colors group"
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/10 text-rose-300 group-hover:bg-white/20 group-hover:text-white transition-colors">
+                  <Trash2 className="h-4 w-4" />
+                </span>
+                Remove from this playlist
+              </button>
+            )}
 
             <button
               onClick={handleToggleFav}

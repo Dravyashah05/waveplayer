@@ -18,6 +18,9 @@ import { ExplorePage } from './pages/Explore';
 import { ytmusicSuggestions } from './services/ytmusicApi';
 import { playerStore } from './services/playerStore';
 import { startAutoplay } from './services/autoplay';
+import { startScrobbleService } from './services/scrobbleService';
+import { registerScrobbleProviders } from './services/scrobbleProviders';
+import { startDiscordPresence } from './services/discordPresence';
 import { settingsStore } from './services/settingsStore';
 import { Track } from './types';
 
@@ -50,6 +53,17 @@ function AppContent() {
 
   // Smart autoplay: extend the queue before it runs dry (never touches the engine).
   useEffect(() => startAutoplay(), []);
+
+  // Background services: scrobbling + presence listen to player events only.
+  useEffect(() => {
+    registerScrobbleProviders();
+    const off1 = startScrobbleService();
+    const off2 = startDiscordPresence();
+    return () => {
+      off1();
+      off2();
+    };
+  }, []);
 
   // Sync with browser Back/Forward (popstate)
   useEffect(() => {

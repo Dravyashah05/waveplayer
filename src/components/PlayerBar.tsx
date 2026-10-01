@@ -24,6 +24,8 @@ import {
   Check,
   MoreVertical,
   Trash2,
+  Clock3,
+  Activity,
 } from 'lucide-react';
 import { Track } from '../types';
 import { SyncedLine, getLyrics, searchLrcLib } from '../services/ytmusicApi';
@@ -33,6 +35,8 @@ import { MiniPlayer } from './MiniPlayer';
 import { playerStore } from '../services/playerStore';
 import { settingsStore } from '../services/settingsStore';
 import { playerEngine, usePlayerEngine } from '../services/playerEngine';
+import { StatsPanel } from './StatsPanel';
+import { AlbumCanvas } from './AlbumCanvas';
 import { toast } from './Toast';
 
 interface Props {
@@ -48,6 +52,33 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
   //     progress, volume, errors, MediaSession). This component is pure UI. ———
   const eng = usePlayerEngine();
   const { isPlaying, isBuffering, progress, duration, volume, muted, error, resolved } = eng;
+  const [statsOpen, setStatsOpen] = useState(false);
+
+  const cycleSpeed = () => {
+    const steps = [1, 1.25, 1.5, 1.75, 2, 0.5, 0.75];
+    const next = steps[(steps.indexOf(eng.playbackRate) + 1) % steps.length] ?? 1;
+    playerEngine.setPlaybackRate(next);
+  };
+
+  const cycleSleep = () => {
+    // Off → 5 → 10 → 15 → 30 → 60 → end of track → Off
+    const cur = eng.sleepRemainingSec;
+    if (cur == null) playerEngine.setSleepTimer(5);
+    else if (cur === 5 * 60) playerEngine.setSleepTimer(10);
+    else if (cur === 10 * 60) playerEngine.setSleepTimer(15);
+    else if (cur === 15 * 60) playerEngine.setSleepTimer(30);
+    else if (cur === 30 * 60) playerEngine.setSleepTimer(60);
+    else if (cur === 60 * 60) playerEngine.setSleepEndOfTrack(true);
+    else playerEngine.clearSleepTimer();
+  };
+
+  const sleepLabel = (() => {
+    const cur = eng.sleepRemainingSec;
+    if (cur == null) return 'Off';
+    if (cur < 0) return 'End of track';
+    const m = Math.ceil(cur / 60);
+    return `${m}m left`;
+  })();
 
   // Mount the hidden YouTube surface once; the engine follows playerStore itself.
   useEffect(() => {
@@ -320,6 +351,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
           >
             {/* Background — flat void with fade gradients */}
             <div className="absolute inset-0 overflow-hidden">
+              <AlbumCanvas artwork={track.thumbnail} title={track.title} />
               <div className="absolute inset-0 bg-black/55" />
               <div
                 className="absolute inset-0"
@@ -410,6 +442,32 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
                       >
                         <Share2 className="h-4 w-4 shrink-0 text-white/60" />
                         <span className="flex-1">Share</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { cycleSpeed(); setMenuOpen(false); }}
+                        className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white/10 transition-colors"
+                      >
+                        <RotateCcw className="h-4 w-4 shrink-0 text-white/60" />
+                        <span className="flex-1">Playback speed</span>
+                        <span className="text-[11px] font-bold text-white">{eng.playbackRate}x</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { cycleSleep(); setMenuOpen(false); }}
+                        className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white/10 transition-colors"
+                      >
+                        <Clock3 className="h-4 w-4 shrink-0 text-white/60" />
+                        <span className="flex-1">Sleep timer</span>
+                        <span className="text-[11px] font-bold text-white">{sleepLabel}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setStatsOpen(true); setMenuOpen(false); }}
+                        className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white/10 transition-colors"
+                      >
+                        <Activity className="h-4 w-4 shrink-0 text-white/60" />
+                        <span className="flex-1">Stats for Nerds</span>
                       </button>
                       <div className="mx-4 my-1.5 h-px bg-white/10" />
                       <button
@@ -618,6 +676,8 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <StatsPanel isOpen={statsOpen} onClose={() => setStatsOpen(false)} track={track} />
     </>
   );
 };

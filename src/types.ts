@@ -14,7 +14,7 @@ export interface Track {
   type?: 'SONG' | 'VIDEO';
   hasLyrics?: boolean;
   lyricsId?: string;
-  source?: 'saavn' | 'ytmusic' | 'youtube';
+  source?: 'saavn' | 'ytmusic' | 'youtube' | 'local';
   year?: string | number | null;
   language?: string;
   copyright?: string;

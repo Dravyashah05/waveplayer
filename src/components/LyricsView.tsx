@@ -1,7 +1,8 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Mic2, Loader2 } from 'lucide-react';
 import { SyncedLine } from '../services/ytmusicApi';
+import { settingsStore } from '../services/settingsStore';
 
 interface Props {
   synced: SyncedLine[] | null;
@@ -19,17 +20,31 @@ interface Props {
   onClose?: () => void;
 }
 
-export const LyricsView: React.FC<Props> = ({ synced, plain, currentIndex, isPlaying, loading, onSeek }) => {
+export const LyricsView: React.FC<Props> = ({ synced, plain, currentIndex, isPlaying, loading, onSeek, progress }) => {
   const lines = synced ? synced.map((s) => s.text) : plain || [];
   const lineRefs = useRef<(HTMLParagraphElement | null)[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
   const isSynced = !!synced?.length;
+  const holdUntil = useRef(0);
+  const [autoScroll, setAutoScroll] = useState(() => settingsStore.get().lyricsAutoScroll);
+  useEffect(() => {
+    const unsub = settingsStore.subscribe(() => setAutoScroll(settingsStore.get().lyricsAutoScroll));
+    return () => {
+      unsub();
+    };
+  }, []);
 
   useEffect(() => {
-    if (currentIndex >= 0 && lineRefs.current[currentIndex]) {
+    if (!autoScroll) return;
+    if (currentIndex >= 0 && Date.now() > holdUntil.current && lineRefs.current[currentIndex]) {
       lineRefs.current[currentIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [currentIndex]);
+  }, [currentIndex, autoScroll]);
+
+  const onUserScroll = () => {
+    // Manual scroll override: pause auto-scroll briefly so reading isn't yanked.
+    holdUntil.current = Date.now() + 10000;
+  };
 
   if (loading) {
     return (
@@ -66,7 +81,7 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, currentIndex, isPla
 
   return (
     <div ref={containerRef} className="flex flex-1 flex-col h-full min-h-0 relative">
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none scroll-smooth">
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none scroll-smooth" onWheel={onUserScroll} onTouchMove={onUserScroll}>
         <div className="px-2 sm:px-4 lg:px-6 py-8">
           {currentIndex === -1 && (
             <p className="text-center text-[12px] tracking-widest uppercase text-white/25 py-8 font-medium">
@@ -78,6 +93,16 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, currentIndex, isPla
             const isActive = i === currentIndex;
             const isPast = i < currentIndex;
             const distance = Math.abs(i - currentIndex);
+            // Word timing only when the provider actually supplied it.
+            const words = isActive ? synced?.[i]?.words : undefined;
+            const hasWords = !!words?.length;
+            let activeWord = -1;
+            if (hasWords) {
+              for (let w = 0; w < words.length; w++) {
+                if ((progress ?? 0) >= words[w].start) activeWord = w;
+                else break;
+              }
+            }
 
             // focus = big + sharp, others = smaller + blurred (Apple Music style)
             let opacity = 0.12;
@@ -131,7 +156,24 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, currentIndex, isPla
                   }}
                 >
                   <span className={isActive ? 'bg-gradient-to-r from-white to-white bg-clip-text' : ''}>
-                    {line || <span className="opacity-20">—</span>}
+                    {hasWords && words ? (
+                      words.map((w, wi) => (
+                        <span
+                          key={wi}
+                          className={
+                            wi === activeWord
+                              ? 'text-white drop-shadow-[0_0_18px_rgba(255,255,255,0.65)]'
+                              : wi < activeWord
+                                ? 'text-white/85'
+                                : 'text-white/45'
+                          }
+                        >
+                          {w.text}{' '}
+                        </span>
+                      ))
+                    ) : (
+                      line || <span className="opacity-20">—</span>
+                    )}
                   </span>
                   {isActive && (
                     <span className="ml-3 inline-block h-[4px] w-8 rounded-full bg-white align-middle opacity-90 -translate-y-1.5 shadow-[0_2px_12px_rgba(255,255,255,0.5)]" />

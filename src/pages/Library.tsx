@@ -19,6 +19,7 @@ import {
   CheckSquare,
   Clock,
   Trash2,
+  Pencil,
   FolderPlus,
   CheckCircle2,
   Share2,
@@ -43,6 +44,7 @@ import { SongRow } from '../components/SongRow';
 import { NoContent } from '../components/NoContent';
 import { SongContextMenu } from '../components/SongContextMenu';
 import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
+import { PlaylistModal, PlaylistModalValue } from '../components/PlaylistModal';
 import { BulkActionBar } from '../components/BulkActionBar';
 import {
   LocalPlaylist,
@@ -109,6 +111,8 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
   const [playlistModalTracks, setPlaylistModalTracks] = useState<Track[]>([]);
   const [isPlaylistModalOpen, setIsPlaylistModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<LocalPlaylist | null>(null);
+  const [renameBusy, setRenameBusy] = useState(false);
 
   // YouTube Playlist integration state
   const [title, setTitle] = useState('');
@@ -531,6 +535,24 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
     deleteLocalPlaylist(id);
     setLocalPlaylists(getLocalPlaylists());
     setToastMessage(`Deleted playlist "${plTitle}"`);
+  };
+
+  const handleRenamePlaylist = (value: PlaylistModalValue) => {
+    if (!renameTarget) return;
+    setRenameBusy(true);
+    try {
+      const all = getLocalPlaylists().map((p) =>
+        p.id === renameTarget.id
+          ? { ...p, title: value.title, description: value.description, privacyStatus: value.privacyStatus, updatedAt: new Date().toISOString() }
+          : p,
+      );
+      saveLocalPlaylists(all);
+      setLocalPlaylists(all);
+      setToastMessage(`Renamed to “${value.title}”`);
+      setRenameTarget(null);
+    } finally {
+      setRenameBusy(false);
+    }
   };
 
   const tabs: { id: TabId; label: string; icon: any; count?: number }[] = [
@@ -1090,9 +1112,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                     {localPlaylists.map((pl) => (
                       <div
                         key={pl.id}
-                        onClick={() => {
-                          if (pl.songs && pl.songs.length) handlePlayAll(pl.songs);
-                        }}
+                        onClick={() => onNavigate?.('playlist', `local:${pl.id}`)}
                         className="group cursor-pointer rounded-[20px] border border-white/10 bg-white/[0.03] p-4 hover:bg-white/[0.07] hover:border-white/20 transition-all flex items-center gap-3.5 shadow-sm"
                       >
                         <div className="h-16 w-16 rounded-[14px] bg-gradient-to-br from-white/15 to-white/5 border border-white/10 flex items-center justify-center text-white font-black text-lg shrink-0 group-hover:scale-105 transition-transform">
@@ -1104,6 +1124,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                           </p>
                           <p className="truncate text-xs text-white/50 mt-0.5">
                             {(pl.songs || []).length} songs • {formatRelativeTime(pl.updatedAt)}
+                            {(pl.sourcePlaylistId || pl.youtubePlaylistId) ? ' • YouTube import' : ''}
                           </p>
                         </div>
                         <div className="flex items-center gap-1">
@@ -1115,8 +1136,21 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                             }}
                             className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black shadow hover:scale-105 active:scale-95 transition-all"
                             title="Play playlist"
+                            aria-label={`Play ${pl.title}`}
                           >
                             <Play className="h-4 w-4 fill-current ml-0.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRenameTarget(pl);
+                            }}
+                            className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-white/40 hover:text-white hover:bg-white/10 transition-colors opacity-0 group-hover:opacity-100"
+                            title="Rename playlist"
+                            aria-label={`Rename ${pl.title}`}
+                          >
+                            <Pencil className="h-4 w-4" />
                           </button>
                           <button
                             type="button"
@@ -1644,6 +1678,20 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
         onSuccess={(plTitle, count) => {
           setToastMessage(`Added ${count} ${count === 1 ? 'song' : 'songs'} to "${plTitle}"`);
         }}
+      />
+
+      {/* Rename Playlist Modal */}
+      <PlaylistModal
+        isOpen={!!renameTarget}
+        mode="edit"
+        initial={
+          renameTarget
+            ? { title: renameTarget.title, description: renameTarget.description || '', privacyStatus: renameTarget.privacyStatus || 'PRIVATE' }
+            : undefined
+        }
+        busy={renameBusy}
+        onClose={() => setRenameTarget(null)}
+        onSubmit={handleRenamePlaylist}
       />
 
       {/* Ephemeral Toast Notification */}

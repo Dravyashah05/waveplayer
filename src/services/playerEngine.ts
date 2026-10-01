@@ -7,6 +7,8 @@ import { logEvent } from './listeningStore';
 import { resolveYouTubeAudio } from './ytmusicApi';
 import { TemporaryStreamCache, canRetryDirectStream, runDeduped } from './temporaryStreamCache';
 import { resolutionRoute } from './playbackSource';
+import { settingsStore } from './settingsStore';
+import { emitPlayerEvent } from './playerEvents';
 
 /**
  * The one and only playback engine.
@@ -30,6 +32,8 @@ export interface ResolvedStream {
   ytId?: string;
   expiresAt?: number;
   mimeType?: string;
+  bitrateKbps?: number;
+  contentLength?: number;
 }
 
 
@@ -44,6 +48,10 @@ export interface EngineState {
   muted: boolean;
   error: string | null;
   resolved: ResolvedStream | null;
+  playbackRate: number;
+  eqActive: boolean;
+  crossfading: boolean;
+  sleepRemainingSec: number | null;
 }
 
 const INITIAL_STATE: EngineState = {
@@ -57,6 +65,10 @@ const INITIAL_STATE: EngineState = {
   muted: false,
   error: null,
   resolved: null,
+  playbackRate: 1,
+  eqActive: false,
+  crossfading: false,
+  sleepRemainingSec: null,
 };
 
 const LS_MUTED = 'wave:muted';
@@ -99,13 +111,34 @@ function loadYTApi(): Promise<void> {
 }
 
 class PlayerEngine {
-  private snapshot: EngineState = { ...INITIAL_STATE, volume: playerStore.volume, muted: loadMuted() };
+  private snapshot: EngineState = { ...INITIAL_STATE, volume: playerStore.volume, muted: loadMuted(), playbackRate: settingsStore.get().playbackRate };
   private listeners = new Set<() => void>();
 
   private audio: HTMLAudioElement | null = null;
   private ytContainer: HTMLElement | null = null;
   private ytPlayer: any = null;
   private ytTimer: number | null = null;
+  private secondTimer: number | null = null;
+
+  // Crossfade / Automix (temporary second element only during a transition)
+  private xfAudio: HTMLAudioElement | null = null;
+  private xfTimer: number | null = null;
+  private xfActive = false;
+
+  // Sleep timer
+  private sleepTimeout: number | null = null;
+  private sleepEndAt: number | null = null;
+  private sleepEndOfTrack = false;
+
+  // Optional WebAudio EQ graph (created lazily, torn down on failure)
+  private eqCtx: AudioContext | null = null;
+  private eqNodes: BiquadFilterNode[] = [];
+  private eqGain: GainNode | null = null;
+  private eqSource: MediaElementAudioSourceNode | null = null;
+  private eqAttached = false;
+  private eqAttaching = false;
+  private eqAnalyser: AnalyserNode | null = null;
+  private silenceStreak = 0;
 
   private lastRevision = -1;
   private currentTrack: Track | null = null;
@@ -123,6 +156,7 @@ class PlayerEngine {
     this.unsubStore = playerStore.subscribe(() => this.sync());
     if (typeof window !== 'undefined') {
       this.ytTimer = window.setInterval(() => this.tickYT(), 250);
+      this.secondTimer = window.setInterval(() => this.tickSecond(), 1000);
     }
   }
 
@@ -228,7 +262,7 @@ class PlayerEngine {
           if (m) {
             const audio = await resolveYouTubeAudio(m.id);
             const r: ResolvedStream = audio
-              ? { source: 'youtube-audio', ytId: m.id, streamUrl: audio.streamUrl, expiresAt: audio.expiresAt, mimeType: audio.mimeType }
+              ? { source: 'youtube-audio', ytId: m.id, streamUrl: audio.streamUrl, expiresAt: audio.expiresAt, mimeType: audio.mimeType, bitrateKbps: audio.bitrate ? Math.round(audio.bitrate / 1000) : undefined }
               : { source: 'youtube-iframe', ytId: m.id };
             this.resolveCache.set(track.id, r);
             return r;
@@ -240,7 +274,7 @@ class PlayerEngine {
       if (import.meta.env.DEV) console.debug('[Wave Stream] Resolving YouTube audio:', track.id);
       const audio = await resolveYouTubeAudio(track.id);
       const r: ResolvedStream = audio
-        ? { source: 'youtube-audio', ytId: track.id, streamUrl: audio.streamUrl, expiresAt: audio.expiresAt, mimeType: audio.mimeType }
+        ? { source: 'youtube-audio', ytId: track.id, streamUrl: audio.streamUrl, expiresAt: audio.expiresAt, mimeType: audio.mimeType, bitrateKbps: audio.bitrate ? Math.round(audio.bitrate / 1000) : undefined }
         : { source: 'youtube-iframe', ytId: track.id };
       this.resolveCache.set(track.id, r);
       if (audio && import.meta.env.DEV) console.debug('[Wave Stream] Resolved audio stream');
@@ -264,6 +298,7 @@ class PlayerEngine {
   // ——— Track loading ———
   private async loadTrack(track: Track, autoplay: boolean) {
     const gen = ++this.loadGen;
+    this.teardownXf();
     this.teardownYT();
     const audio = this.ensureAudio();
     try { audio.pause(); } catch {}
@@ -273,6 +308,8 @@ class PlayerEngine {
     this.currentTrack = track;
     this.wantPlay = autoplay;
     this.directRetries.delete(track.id);
+    this.silenceSkipsThisTrack = 0;
+    this.silenceStreak = 0;
     this.pendingSeek = null;
     this.failedIds.delete(track.id);
     this.set({
@@ -309,6 +346,8 @@ class PlayerEngine {
       try { a.crossOrigin = 'anonymous'; } catch {}
       a.addEventListener('timeupdate', () => {
         if (!this.seeking) this.set({ progress: a.currentTime });
+        this.updatePositionState();
+        this.maybeCrossfade(a);
       });
       a.addEventListener('loadedmetadata', () => {
         this.set({ duration: Number.isFinite(a.duration) ? a.duration : this.snapshot.duration });
@@ -323,10 +362,12 @@ class PlayerEngine {
         this.set({ isPlaying: true, isBuffering: false, error: null });
         this.updateMedia(this.currentTrack, true);
         this.preloadNext();
+        if (this.currentTrack) emitPlayerEvent({ type: 'PLAY', track: this.currentTrack });
       });
       a.addEventListener('pause', () => {
         this.set({ isPlaying: false, isBuffering: this.wantPlay });
         this.updateMedia(this.currentTrack, false);
+        if (this.currentTrack) emitPlayerEvent({ type: 'PAUSE', track: this.currentTrack, progress: this.snapshot.progress });
       });
       a.addEventListener('waiting', () => {
         if (this.wantPlay) this.set({ isBuffering: true });
@@ -340,9 +381,23 @@ class PlayerEngine {
       a.addEventListener('error', () => {
         const t = this.currentTrack;
         if (!t || this.snapshot.trackId !== t.id || this.snapshot.backend !== 'audio') return;
+        // A CORS-opaque stream goes silent through MediaElementSource — drop
+        // the EQ graph first so plain playback can continue.
+        if (this.eqAttached) {
+          this.teardownEq();
+          settingsStore.set('eqEnabled', false);
+        }
         void this.recoverAudioFailure(t);
       });
       this.audio = a;
+      if (settingsStore.get().eqEnabled && !this.eqAttached && !this.eqAttaching) {
+        this.eqAttaching = true;
+        try {
+          this.attachEq();
+        } finally {
+          this.eqAttaching = false;
+        }
+      }
     }
     return this.audio;
   }
@@ -386,7 +441,7 @@ class PlayerEngine {
         const refreshed = await resolveYouTubeAudio(videoId);
         if (gen !== this.loadGen || this.currentTrack?.id !== track.id) return;
         if (refreshed) {
-          const result: ResolvedStream = { source: 'youtube-audio', ytId: videoId, streamUrl: refreshed.streamUrl, expiresAt: refreshed.expiresAt, mimeType: refreshed.mimeType };
+          const result: ResolvedStream = { source: 'youtube-audio', ytId: videoId, streamUrl: refreshed.streamUrl, expiresAt: refreshed.expiresAt, mimeType: refreshed.mimeType, bitrateKbps: refreshed.bitrate ? Math.round(refreshed.bitrate / 1000) : undefined };
           this.resolveCache.set(track.id, result);
           if (import.meta.env.DEV) console.debug('[Wave Stream] Retrying refreshed audio stream');
           this.startAudio(track, result, autoplay);
@@ -404,7 +459,7 @@ class PlayerEngine {
           const audio = await resolveYouTubeAudio(videoId);
           if (gen !== this.loadGen || this.currentTrack?.id !== track.id) return;
           if (audio) {
-            const result: ResolvedStream = { source: 'youtube-audio', ytId: videoId, streamUrl: audio.streamUrl, expiresAt: audio.expiresAt, mimeType: audio.mimeType };
+            const result: ResolvedStream = { source: 'youtube-audio', ytId: videoId, streamUrl: audio.streamUrl, expiresAt: audio.expiresAt, mimeType: audio.mimeType, bitrateKbps: audio.bitrate ? Math.round(audio.bitrate / 1000) : undefined };
             this.resolveCache.set(track.id, result);
             this.startAudio(track, result, autoplay);
             return;
@@ -431,15 +486,18 @@ class PlayerEngine {
   private startAudio(track: Track, resolved: ResolvedStream, autoplay: boolean) {
     const a = this.ensureAudio();
     a.volume = this.snapshot.muted ? 0 : this.snapshot.volume / 100;
+    try { a.playbackRate = this.snapshot.playbackRate; } catch {}
     a.src = https(resolved.streamUrl!);
     try { a.load(); } catch {}
     this.set({ backend: 'audio', resolved });
+    emitPlayerEvent({ type: 'SOURCE_CHANGED', track, source: resolved.source });
     if (autoplay) {
       this.set({ isBuffering: true });
       this.playAudio(a);
     } else {
       this.set({ isBuffering: false, isPlaying: false });
     }
+    emitPlayerEvent({ type: 'TRACK_START', track, duration: this.snapshot.duration || track.durationSeconds || 0 });
   }
 
   // ——— YouTube iframe backend ———
@@ -455,6 +513,7 @@ class PlayerEngine {
     const mount = document.createElement('div');
     host.appendChild(mount);
     this.set({ backend: 'youtube', isBuffering: true });
+    emitPlayerEvent({ type: 'SOURCE_CHANGED', track, source: 'youtube-iframe' });
     try {
       this.ytPlayer = new w.YT.Player(mount, {
         videoId,
@@ -534,6 +593,7 @@ class PlayerEngine {
     this.loadGen++;
     this.wantPlay = false;
     this.pendingSeek = null;
+    this.teardownXf();
     this.teardownYT();
     if (this.audio) {
       try { this.audio.pause(); } catch {}
@@ -546,6 +606,7 @@ class PlayerEngine {
   // ——— Failure → fallback once, else error (+ auto-skip when possible) ———
   private fail(track: Track, message: string) {
     if (this.currentTrack?.id !== track.id) return;
+    emitPlayerEvent({ type: 'TRACK_ERROR', track, reason: message });
     // Auto-skip poisoned tracks so one bad item never stalls the session
     if (!this.failedIds.has(track.id) && playerStore.queue().length > 1) {
       this.failedIds.add(track.id);
@@ -636,6 +697,7 @@ class PlayerEngine {
     if (!t) return;
     const target = Math.max(0, Math.min(sec, this.snapshot.duration || sec));
     this.set({ progress: target });
+    emitPlayerEvent({ type: 'SEEK', track: t, progress: target });
     const s = this.snapshot;
     if (s.backend === 'audio' && this.audio) {
       try {
@@ -662,6 +724,7 @@ class PlayerEngine {
     try {
       logEvent({ songId: t.id, track: t, event: 'skip', playedSeconds: fmtForLog(this.snapshot.progress), duration: fmtForLog(this.snapshot.duration || t.durationSeconds || 0) });
     } catch {}
+    emitPlayerEvent({ type: 'TRACK_SKIP', track: t, progress: this.snapshot.progress, reason: 'next' });
     playerStore.next();
   }
 
@@ -688,6 +751,14 @@ class PlayerEngine {
     try {
       logEvent({ songId: t.id, track: t, event: 'complete', playedSeconds: fmtForLog(this.snapshot.duration || t.durationSeconds || 0), duration: fmtForLog(this.snapshot.duration || t.durationSeconds || 0) });
     } catch {}
+    emitPlayerEvent({ type: 'TRACK_COMPLETE', track: t, duration: this.snapshot.duration || t.durationSeconds || 0 });
+    if (this.sleepEndOfTrack) {
+      this.clearSleepTimer();
+      this.wantPlay = false;
+      this.set({ isPlaying: false, isBuffering: false, progress: 0 });
+      this.updateMedia(t, false);
+      return;
+    }
     if (playerStore.repeat === 'one') {
       this.replay();
       return;
@@ -729,6 +800,361 @@ class PlayerEngine {
     try { this.ytPlayer?.setVolume?.(next ? 0 : this.snapshot.volume); } catch {}
   }
 
+  // ——— Playback speed (0.5x–2x, persisted) ———
+  setPlaybackRate(rate: number) {
+    const r = Math.max(0.5, Math.min(2, Math.round(rate * 100) / 100));
+    settingsStore.set('playbackRate', r);
+    this.set({ playbackRate: r });
+    if (this.audio) {
+      try { this.audio.playbackRate = r; } catch {}
+    }
+  }
+
+  // ——— Sleep timer ———
+  setSleepTimer(minutes: number) {
+    this.clearSleepTimer();
+    const mins = Math.max(0, Math.min(480, Math.round(minutes)));
+    if (mins <= 0) {
+      this.sleepEndOfTrack = false;
+      this.set({ sleepRemainingSec: null });
+      return;
+    }
+    this.sleepEndOfTrack = false;
+    this.sleepEndAt = Date.now() + mins * 60_000;
+    this.set({ sleepRemainingSec: mins * 60 });
+    this.armSleepTimeout();
+  }
+
+  setSleepEndOfTrack(on: boolean) {
+    this.clearSleepTimer();
+    this.sleepEndOfTrack = on;
+    this.set({ sleepRemainingSec: on ? -1 : null });
+  }
+
+  clearSleepTimer() {
+    if (this.sleepTimeout != null) {
+      try { window.clearTimeout(this.sleepTimeout); } catch {}
+      this.sleepTimeout = null;
+    }
+    this.sleepEndAt = null;
+    this.sleepEndOfTrack = false;
+    if (this.snapshot.sleepRemainingSec !== null) this.set({ sleepRemainingSec: null });
+  }
+
+  get sleepArmed(): boolean {
+    return this.sleepTimeout != null || this.sleepEndOfTrack;
+  }
+
+  private armSleepTimeout() {
+    if (this.sleepEndAt == null || this.sleepTimeout != null) return;
+    const delay = Math.max(0, this.sleepEndAt - Date.now());
+    this.sleepTimeout = window.setTimeout(() => {
+      this.sleepTimeout = null;
+      this.sleepEndAt = null;
+      this.set({ sleepRemainingSec: null });
+      this.pause();
+    }, delay);
+  }
+
+  private tickSecond() {
+    if (this.sleepEndAt != null) {
+      const remain = Math.max(0, Math.round((this.sleepEndAt - Date.now()) / 1000));
+      if (remain !== this.snapshot.sleepRemainingSec) this.set({ sleepRemainingSec: remain });
+    }
+    this.updatePositionState();
+    this.tickSilenceSkip();
+  }
+
+  private updatePositionState() {
+    try {
+      const nav = navigator as any;
+      const ms = nav?.mediaSession;
+      if (!ms || typeof ms.setPositionState !== 'function') return;
+      const d = this.snapshot.duration;
+      if (!(d > 0)) return;
+      ms.setPositionState({ duration: d, playbackRate: this.snapshot.playbackRate, position: Math.min(this.snapshot.progress, d) });
+    } catch {}
+  }
+
+  // ——— Crossfade / Automix Beta ———
+  /** Effective overlap seconds. Automix reuses the same path with its own
+   *  length; there is no true beat matching (no BPM analysis available), so
+   *  Automix is honestly an intelligent crossfade. */
+  private transitionSeconds(): number {
+    const s = settingsStore.get();
+    if (s.automix && s.experimentalAutomix) return Math.max(2, Math.min(12, s.automixSeconds));
+    return Math.max(0, Math.min(12, s.crossfadeSeconds));
+  }
+
+  private maybeCrossfade(a: HTMLAudioElement) {
+    if (this.xfActive || !this.wantPlay || this.snapshot.backend !== 'audio') return;
+    const seconds = this.transitionSeconds();
+    if (seconds <= 0 || !Number.isFinite(a.duration) || a.duration <= seconds + 1) return;
+    const remaining = a.duration - a.currentTime;
+    if (remaining > seconds || remaining < 0.5) return;
+    const q = playerStore.queue();
+    const next = q[playerStore.currentIndex() + 1];
+    if (!next || next.id === this.currentTrack?.id) return;
+    if (playerStore.repeat === 'one') return;
+    void this.beginCrossfade(next, seconds);
+  }
+
+  private teardownXf() {
+    if (this.xfTimer != null) {
+      try { window.clearInterval(this.xfTimer); } catch {}
+      this.xfTimer = null;
+    }
+    if (this.xfAudio) {
+      try { this.xfAudio.pause(); } catch {}
+      try { this.xfAudio.removeAttribute('src'); } catch {}
+      try { this.xfAudio.load(); } catch {}
+      this.xfAudio = null;
+    }
+    this.xfActive = false;
+    if (this.snapshot.crossfading) this.set({ crossfading: false });
+  }
+
+  private async beginCrossfade(next: Track, seconds: number) {
+    if (this.xfActive || !this.audio) return;
+    const main = this.audio;
+    let resolved: ResolvedStream;
+    try {
+      resolved = await this.resolveStream(next);
+    } catch {
+      return;
+    }
+    if (!resolved.streamUrl || !this.wantPlay || this.snapshot.backend !== 'audio') return;
+    // Queue must not have shifted under us.
+    const q = playerStore.queue();
+    if (q[playerStore.currentIndex() + 1]?.id !== next.id) return;
+    const target = this.snapshot.muted ? 0 : this.snapshot.volume / 100;
+    const tmp = document.createElement('audio');
+    tmp.preload = 'auto';
+    try { tmp.playbackRate = this.snapshot.playbackRate; } catch {}
+    try { tmp.crossOrigin = 'anonymous'; } catch {}
+    this.xfAudio = tmp;
+    this.xfActive = true;
+    this.set({ crossfading: true });
+    tmp.src = https(resolved.streamUrl);
+    try { tmp.load(); } catch {}
+    tmp.volume = 0;
+    try {
+      await tmp.play();
+    } catch {
+      this.teardownXf();
+      return;
+    }
+    const steps = Math.max(4, Math.round(seconds * 10));
+    let step = 0;
+    this.xfTimer = window.setInterval(() => {
+      step++;
+      const k = Math.min(1, step / steps);
+      try { main.volume = target * (1 - k); } catch {}
+      try { tmp.volume = target * k; } catch {}
+      if (k >= 1) {
+        if (this.xfTimer != null) {
+          try { window.clearInterval(this.xfTimer); } catch {}
+          this.xfTimer = null;
+        }
+        // Hand over: advance the store, then align the fresh element.
+        const at = Math.min(Math.max(0, tmp.currentTime), seconds + 0.5);
+        const tmpEl = tmp;
+        playerStore.next();
+        window.setTimeout(() => {
+          try {
+            if (this.audio && this.snapshot.trackId === next.id) {
+              this.audio.currentTime = at;
+              this.audio.volume = target;
+              try { this.audio.playbackRate = this.snapshot.playbackRate; } catch {}
+            }
+          } catch {}
+          try { tmpEl.pause(); } catch {}
+          try { tmpEl.removeAttribute('src'); } catch {}
+          if (this.xfAudio === tmpEl) this.xfAudio = null;
+          this.xfActive = false;
+          if (this.snapshot.crossfading) this.set({ crossfading: false });
+        }, 350);
+      }
+    }, 100);
+  }
+
+  // ——— Optional WebAudio EQ (9-band). Created lazily; any failure tears the
+  // graph down and plain HTMLAudio continues. Cross-origin streams without
+  // CORS headers will go silent through MediaElementSource — if the main
+  // element errors while the graph is attached, we auto-disable. ———
+  static readonly EQ_FREQS = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000];
+
+  static presetGains(preset: string): number[] {
+    switch (preset) {
+      case 'bass': return [6, 5, 4, 2, 0, 0, 0, 0, 0];
+      case 'treble': return [0, 0, 0, 0, 0, 2, 4, 5, 6];
+      case 'vocal': return [-2, -1, 0, 2, 4, 4, 2, 0, -1];
+      case 'rock': return [5, 3, 2, 1, 0, 1, 3, 4, 5];
+      case 'pop': return [2, 3, 4, 3, 1, 0, 1, 2, 3];
+      case 'classical': return [4, 3, 2, 1, 0, 1, 2, 4, 5];
+      default: return [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    }
+  }
+
+  setEqEnabled(on: boolean) {
+    settingsStore.set('eqEnabled', on);
+    if (on) this.attachEq();
+    else this.teardownEq();
+  }
+
+  setEqPreset(preset: string) {
+    const gains = PlayerEngine.presetGains(preset);
+    settingsStore.set('eqPreset', preset as any);
+    settingsStore.set('eqGains', gains);
+    this.applyEqGains();
+  }
+
+  setEqGains(gains: number[]) {
+    const clamped = PlayerEngine.EQ_FREQS.map((_, i) => Math.max(-12, Math.min(12, Number(gains[i]) || 0)));
+    settingsStore.set('eqPreset', 'custom');
+    settingsStore.set('eqGains', clamped);
+    this.applyEqGains();
+  }
+
+  private attachEq() {
+    if (this.eqAttached || typeof window === 'undefined') return;
+    try {
+      const AC = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AC) throw new Error('no AudioContext');
+      const audio = this.ensureAudio();
+      const ctx = new AC();
+      const src = ctx.createMediaElementSource(audio);
+      let node: AudioNode = src as unknown as AudioNode;
+      this.eqNodes = PlayerEngine.EQ_FREQS.map((f) => {
+        const bq = ctx.createBiquadFilter();
+        bq.type = 'peaking';
+        bq.frequency.value = f;
+        bq.Q.value = 1;
+        bq.gain.value = 0;
+        node.connect(bq);
+        node = bq;
+        return bq;
+      });
+      this.eqGain = ctx.createGain();
+      this.eqGain.gain.value = 1;
+      node.connect(this.eqGain);
+      this.eqAnalyser = ctx.createAnalyser();
+      this.eqAnalyser.fftSize = 512;
+      this.eqGain.connect(this.eqAnalyser);
+      this.eqAnalyser.connect(ctx.destination);
+      this.eqCtx = ctx;
+      this.eqSource = src;
+      this.eqAttached = true;
+      this.applyEqGains();
+      if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
+      this.set({ eqActive: true });
+    } catch {
+      this.teardownEq();
+      settingsStore.set('eqEnabled', false);
+    }
+  }
+
+  private applyEqGains() {
+    if (!this.eqAttached) return;
+    const gains = settingsStore.get().eqGains;
+    this.eqNodes.forEach((n, i) => {
+      try { n.gain.value = gains[i] || 0; } catch {}
+    });
+  }
+
+  private teardownEq() {
+    try { this.eqNodes.forEach((n) => { try { n.disconnect(); } catch {} }); } catch {}
+    try { this.eqGain?.disconnect(); } catch {}
+    try { this.eqAnalyser?.disconnect(); } catch {}
+    try { this.eqSource?.disconnect(); } catch {}
+    if (this.eqCtx) {
+      try { void this.eqCtx.close().catch(() => {}); } catch {}
+    }
+    this.eqCtx = null;
+    this.eqNodes = [];
+    this.eqGain = null;
+    this.eqAnalyser = null;
+    this.eqSource = null;
+    this.eqAttached = false;
+    this.silenceStreak = 0;
+    if (this.snapshot.eqActive) this.set({ eqActive: false });
+  }
+
+  // Experimental skip-silence: only active while the EQ analyser chain is
+  // attached (no full-track decode, no extra work). Skips forward in small
+  // steps past sustained near-silence; bounded per track to avoid runaway.
+  private silenceSkipsThisTrack = 0;
+
+  private tickSilenceSkip() {
+    try {
+      const s = settingsStore.get();
+      if (!s.skipSilence || !s.experimentalSkipSilence || !this.eqAttached || !this.eqAnalyser) {
+        this.silenceStreak = 0;
+        return;
+      }
+      if (!this.snapshot.isPlaying || this.snapshot.backend !== 'audio' || !this.audio) return;
+      const remaining = (this.snapshot.duration || 0) - (this.snapshot.progress || 0);
+      if (!(remaining > 8) || this.silenceSkipsThisTrack >= 3) return;
+      const buf = new Float32Array(this.eqAnalyser.fftSize);
+      this.eqAnalyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      const rms = Math.sqrt(sum / buf.length);
+      if (rms < 0.004) this.silenceStreak++;
+      else this.silenceStreak = 0;
+      if (this.silenceStreak >= 3) {
+        this.silenceStreak = 0;
+        this.silenceSkipsThisTrack++;
+        this.seek(this.snapshot.progress + 2);
+      }
+    } catch {
+      this.silenceStreak = 0;
+    }
+  }
+
+  /** Current-stream facts for Stats for Nerds. Unknown stays "Unknown". */
+  getStats(): {
+    source: string; codec: string; bitrate: string; sampleRate: string;
+    bitDepth: string; channels: string; container: string; host: string;
+    duration: number; progress: number; backend: string; expiresAt?: number;
+  } {
+    const r = this.snapshot.resolved;
+    const host = (() => {
+      try { return r?.streamUrl ? new URL(r.streamUrl).hostname : 'Unknown'; } catch { return 'Unknown'; }
+    })();
+    const mime = (r?.mimeType || '').toLowerCase();
+    const codec = mime.includes('mp4') || mime.includes('mp4a') || mime.includes('aac') ? 'AAC'
+      : mime.includes('webm') || mime.includes('opus') ? 'Opus'
+      : mime.includes('mpeg') || mime.includes('mp3') ? 'MP3'
+      : mime.includes('flac') ? 'FLAC'
+      : r?.source === 'saavn' ? 'AAC' : 'Unknown';
+    let bitrate = 'Unknown';
+    if (typeof r?.bitrateKbps === 'number' && r.bitrateKbps > 0) bitrate = `${r.bitrateKbps} kbps`;
+    else if (r?.source === 'saavn' && r.streamUrl) {
+      bitrate = r.streamUrl.includes('_320') ? '320 kbps' : r.streamUrl.includes('_160') ? '160 kbps' : 'Unknown';
+    }
+    let bufferedSec = 0;
+    try {
+      const buf = this.audio?.buffered;
+      if (buf && buf.length) bufferedSec = Math.max(0, buf.end(buf.length - 1) - this.snapshot.progress);
+    } catch {}
+    void bufferedSec;
+    return {
+      source: r?.source === 'saavn' ? 'JioSaavn' : r?.source === 'youtube-audio' ? 'YouTube' : r?.source === 'youtube-iframe' ? 'YouTube (iframe)' : 'Unknown',
+      codec,
+      bitrate,
+      sampleRate: 'Unknown',
+      bitDepth: 'Unknown',
+      channels: 'Unknown',
+      container: host.includes('googlevideo') ? 'progressive stream' : host === 'Unknown' ? 'Unknown' : 'HTTP stream',
+      host,
+      duration: this.snapshot.duration,
+      progress: this.snapshot.progress,
+      backend: this.snapshot.backend || 'none',
+      expiresAt: r?.expiresAt,
+    };
+  }
+
   // ——— OS integration ———
   private updateMedia(track: Track | null, playing: boolean) {
     if (typeof document !== 'undefined') {
@@ -751,6 +1177,18 @@ class PlayerEngine {
         nav.mediaSession.setActionHandler('pause', () => this.pause());
         nav.mediaSession.setActionHandler('previoustrack', () => this.prev());
         nav.mediaSession.setActionHandler('nexttrack', () => this.next());
+        try {
+          nav.mediaSession.setActionHandler('seekbackward', (d: any) => {
+            const off = typeof d?.seekOffset === 'number' ? d.seekOffset : 10;
+            this.seek(Math.max(0, this.snapshot.progress - off));
+          });
+        } catch {}
+        try {
+          nav.mediaSession.setActionHandler('seekforward', (d: any) => {
+            const off = typeof d?.seekOffset === 'number' ? d.seekOffset : 10;
+            this.seek(this.snapshot.progress + off);
+          });
+        } catch {}
         try {
           nav.mediaSession.setActionHandler('seekto', (d: any) => {
             if (typeof d?.seekTime === 'number') this.seek(d.seekTime);

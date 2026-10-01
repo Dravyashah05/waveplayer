@@ -272,7 +272,8 @@ export async function getUpNext(videoId: string): Promise<Track[]> {
   })).filter(t=> /^[a-zA-Z0-9_-]{11}$/.test(t.id));
 }
 
-export interface SyncedLine { time: number; text: string; }
+export interface SyncedWord { text: string; start: number; end: number; }
+export interface SyncedLine { time: number; text: string; words?: SyncedWord[]; }
 export interface LyricsData { synced: SyncedLine[] | null; plain: string[] | null; source: string | null; lyrics: string[] | null; }
 
 export function parseLRC(lrc: string): SyncedLine[] {

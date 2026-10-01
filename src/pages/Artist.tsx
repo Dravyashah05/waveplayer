@@ -26,6 +26,7 @@ import { getSaavnArtistDetails, searchSaavnArtists } from '../services/saavnApi'
 import { getYTMusicArtist } from '../services/ytmusicApi';
 import { deduplicateTracks, deduplicateAlbums, deduplicateArtists } from '../services/searchEngine';
 import { fetchRadio } from '../services/recommendationApi';
+import { recommendTracks } from '../services/recommendationEngine';
 import { playerStore } from '../services/playerStore';
 import { usePlayerEngine } from '../services/playerEngine';
 import { SongRow } from '../components/SongRow';
@@ -61,13 +62,24 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
   onNavigate,
   onBack,
 }) => {
-  const [artist, setArtist] = useState<SearchArtist | null>(null);
+  const activateCard = (fn: () => void) => ({
+    role: 'button' as const,
+    tabIndex: 0,
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        fn();
+      }
+    },
+  });  const [artist, setArtist] = useState<SearchArtist | null>(null);
   const [topSongs, setTopSongs] = useState<Track[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
   const [singles, setSingles] = useState<Album[]>([]);
   const [similarArtists, setSimilarArtists] = useState<SearchArtist[]>([]);
+  const [recommended, setRecommended] = useState<Track[]>([]);
   const [bio, setBio] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [showAllSongs, setShowAllSongs] = useState(false);
 
   // Discovery / Empty State
@@ -104,10 +116,12 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
   // Multi-source loader
   const loadArtistData = useCallback(async (id: string) => {
     setLoading(true);
+    setLoadError('');
     setTopSongs([]);
     setAlbums([]);
     setSingles([]);
     setSimilarArtists([]);
+    setRecommended([]);
     setBio('');
     setShowAllSongs(false);
 
@@ -161,13 +175,24 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
       }
 
       setArtist(resolvedArtist);
-      setTopSongs(deduplicateTracks(rawSongs));
+      const songs = deduplicateTracks(rawSongs);
+      setTopSongs(songs);
       setAlbums(deduplicateAlbums(rawAlbums));
       setSingles(deduplicateAlbums(rawSingles));
       setSimilarArtists(deduplicateArtists(rawSimilar));
       setBio(resolvedBio);
+      if (!resolvedArtist) {
+        setLoadError('Artist not found. It may have been removed or the link is wrong.');
+      } else {
+        // Recommended: central engine seeded from the artist's own top songs.
+        const seeds = songs.slice(0, 3);
+        const exclude = new Set(songs.map((t) => t.id));
+        recommendTracks({ seedTracks: seeds, excludeIds: exclude, limit: 8 })
+          .then((recs) => setRecommended(recs.filter((t) => !exclude.has(t.id)).slice(0, 8)))
+          .catch(() => setRecommended([]));
+      }
     } catch (err) {
-      console.error('[ArtistPage] Error loading artist:', err);
+      setLoadError('Something went wrong loading this artist. Check your connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -301,6 +326,8 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                 key={a.artistId}
                 whileHover={{ y: -4 }}
                 onClick={() => onNavigate?.('artist', a.artistId)}
+                {...activateCard(() => onNavigate?.('artist', a.artistId))}
+                aria-label={`Open artist ${a.name}`}
                 className="group relative cursor-pointer p-4 text-center flex flex-col items-center rounded-[24px] bg-white/[0.03] border border-white/10 hover:bg-white/[0.08] hover:border-white/20 transition-all shadow-sm"
               >
                 <div className="relative aspect-square w-28 sm:w-32 overflow-hidden rounded-full bg-[#141416] ring-2 ring-white/10 group-hover:ring-white/30 shadow-lg transition-all">
@@ -335,9 +362,51 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
   // 2. LOADING STATE
   if (loading && !artist) {
     return (
-      <div className="flex h-96 flex-col items-center justify-center gap-3">
-        <Loader2 className="h-9 w-9 animate-spin text-purple-400" />
-        <p className="text-sm font-semibold text-[#8e8e93]">Loading artist profile & discography...</p>
+      <div className="space-y-8 pb-24" aria-busy="true" aria-label="Loading artist">
+        <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-6 sm:p-8">
+          <div className="flex flex-col sm:flex-row items-center gap-6">
+            <div className="h-[170px] w-[170px] sm:h-[200px] sm:w-[200px] shrink-0 animate-pulse rounded-full bg-white/10" />
+            <div className="flex-1 space-y-3 w-full">
+              <div className="h-9 w-2/3 animate-pulse rounded-lg bg-white/10" />
+              <div className="h-4 w-1/3 animate-pulse rounded-lg bg-white/10" />
+              <div className="flex gap-3 pt-2">
+                <div className="h-11 w-36 animate-pulse rounded-full bg-white/10" />
+                <div className="h-11 w-28 animate-pulse rounded-full bg-white/10" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-2 py-1.5">
+              <div className="h-12 w-12 animate-pulse rounded-xl bg-white/10" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3.5 w-1/2 animate-pulse rounded bg-white/10" />
+                <div className="h-3 w-1/3 animate-pulse rounded bg-white/10" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // 2b. ERROR STATE
+  if (!loading && (loadError || !artist)) {
+    return (
+      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-center">
+        <p className="text-[15px] font-bold text-white">{loadError || 'Artist not found'}</p>
+        <p className="max-w-[36ch] text-xs text-white/50">Nothing was changed. Check the link or your connection.</p>
+        <div className="flex gap-2 pt-1">
+          {artistId && (
+            <button type="button" onClick={() => void loadArtistData(artistId)} className="rounded-full bg-white px-5 py-2 text-xs font-bold text-black">
+              Try Again
+            </button>
+          )}
+          <button type="button" onClick={() => (onBack ? onBack() : window.history.back())} className="rounded-full border border-white/10 px-5 py-2 text-xs font-semibold text-white/75">
+            Go Back
+          </button>
+        </div>
       </div>
     );
   }
@@ -391,7 +460,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
           {/* Details */}
           <div className="flex flex-1 flex-col justify-end min-w-0 text-center sm:text-left">
             <div className="inline-flex items-center justify-center sm:justify-start gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-purple-400">
-              <Sparkles className="h-3.5 w-3.5" /> Verified Artist
+              <Sparkles className="h-3.5 w-3.5" /> Artist
             </div>
 
             <h1 className="mt-2 text-[28px] sm:text-[38px] lg:text-[46px] font-black tracking-[-0.03em] leading-tight text-white line-clamp-2">
@@ -399,7 +468,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
             </h1>
 
             <p className="mt-1 text-[14px] sm:text-[15px] font-medium text-white/70">
-              {artist?.role || 'Lead Singer & Music Producer'}
+              {artist?.role || 'Artist'}
             </p>
 
             <div className="mt-2.5 flex flex-wrap items-center justify-center sm:justify-start gap-2 text-xs text-white/60">
@@ -512,6 +581,8 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                 key={al.albumId}
                 whileHover={{ y: -4 }}
                 onClick={() => onNavigate?.('album', al.albumId)}
+                {...activateCard(() => onNavigate?.('album', al.albumId))}
+                aria-label={`Open album ${al.name}`}
                 className="group cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
               >
                 <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
@@ -556,6 +627,8 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                 key={sg.albumId}
                 whileHover={{ y: -4 }}
                 onClick={() => onNavigate?.('album', sg.albumId)}
+                {...activateCard(() => onNavigate?.('album', sg.albumId))}
+                aria-label={`Open single ${sg.name}`}
                 className="group cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
               >
                 <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
@@ -599,6 +672,8 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
               <div
                 key={sim.artistId}
                 onClick={() => onNavigate?.('artist', sim.artistId)}
+                {...activateCard(() => onNavigate?.('artist', sim.artistId))}
+                aria-label={`Open artist ${sim.name}`}
                 className="group flex flex-col items-center text-center cursor-pointer min-w-[125px] w-[125px] shrink-0 p-2.5 rounded-2xl hover:bg-white/[0.04] transition-all"
               >
                 <div className="relative aspect-square w-full rounded-full overflow-hidden bg-[#18181b] ring-2 ring-white/10 group-hover:ring-white/30 shadow-md transition-all">
@@ -625,7 +700,38 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
       )}
 
       {/* ======================================================= */}
-      {/* 6. ARTIST BIO CHAPTERS */}
+      {/* 6. RECOMMENDED (central recommendation engine) */}
+      {/* ======================================================= */}
+      {recommended.length > 0 && (
+        <div className="space-y-3.5">
+          <div className="flex items-center justify-between px-1">
+            <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-amber-400" /> Fans Also Like These Songs
+            </h2>
+          </div>
+          <p className="-mt-2 px-1 text-[12px] text-white/45">
+            Because you listen to {artist?.name || 'this artist'} • Similar to these songs
+          </p>
+          <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-2 divide-y divide-white/[0.04]">
+            {recommended.map((track, idx) => (
+              <SongRow
+                key={`artist-rec-${track.id}-${idx}`}
+                track={track}
+                index={idx}
+                isActive={currentTrack?.id === track.id}
+                isPlaying={isPlaying}
+                onPlay={() => onPlay(track, recommended)}
+                showAlbum={true}
+                onOpenMenu={handleOpenContextMenu}
+                onNavigate={onNavigate}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================= */}
+      {/* 7. ARTIST BIO CHAPTERS */}
       {/* ======================================================= */}
       {bio && (
         <ArtistBio

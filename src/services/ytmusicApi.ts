@@ -203,10 +203,48 @@ export async function getAlbumDetails(albumId: string): Promise<{ info: Album; t
   const res = await fetch(`${YT_BASE}/album/${encodeURIComponent(albumId)}`);
   if (!res.ok) return null;
   const data = await res.json();
-  if (!data?.albumId) return null;
-  const info = toAlbum(data)!;
+  if (!data?.albumId && !data?.name && !data?.title) return null;
+  const info = toAlbum(data) || {
+    albumId: data.albumId || albumId,
+    playlistId: data.playlistId || '',
+    name: data.name || data.title || 'Album',
+    artist: { artistId: data.artist?.artistId || null, name: data.artist?.name || 'Various Artists' },
+    year: typeof data.year === 'number' ? data.year : null,
+    thumbnails: Array.isArray(data.thumbnails) ? data.thumbnails : [],
+    type: 'ALBUM' as const,
+  };
   const tracks = Array.isArray(data.songs) ? (data.songs.map(toTrack).filter(Boolean) as Track[]) : [];
   return { info, tracks };
+}
+
+export async function getYTMusicArtist(artistId: string): Promise<{
+  artist: SearchArtist;
+  topSongs: Track[];
+  topAlbums: Album[];
+  singles?: Album[];
+  similarArtists?: SearchArtist[];
+} | null> {
+  if (!artistId) return null;
+  try {
+    const res = await fetch(`${YT_BASE}/artist/${encodeURIComponent(artistId)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.name) return null;
+    const artist: SearchArtist = toArtist(data) || {
+      artistId: data.artistId || artistId,
+      name: data.name,
+      thumbnails: data.thumbnails || [],
+      type: 'ARTIST' as const,
+    };
+    const topSongs = Array.isArray(data.topSongs) ? (data.topSongs.map(toTrack).filter(Boolean) as Track[]) : [];
+    const topAlbums = Array.isArray(data.topAlbums) ? (data.topAlbums.map(toAlbum).filter(Boolean) as Album[]) : [];
+    const singles = Array.isArray(data.singles) ? (data.singles.map(toAlbum).filter(Boolean) as Album[]) : [];
+    const similarArtists = Array.isArray(data.similarArtists) ? (data.similarArtists.map(toArtist).filter(Boolean) as SearchArtist[]) : [];
+
+    return { artist, topSongs, topAlbums, singles, similarArtists };
+  } catch {
+    return null;
+  }
 }
 
 export async function getHomeSections(): Promise<any[]> {

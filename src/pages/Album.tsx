@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Play,
@@ -16,10 +16,21 @@ import {
   Layers,
   Music2,
   Check,
+  CheckCircle2,
+  Plus,
+  Radio,
 } from 'lucide-react';
 import { Track, Album } from '../types';
-import { getSaavnAlbumDetails, searchSaavnAlbums } from '../services/saavnApi';
+import { getSaavnAlbumDetails, searchSaavnAlbums, getSaavnBrowseModules } from '../services/saavnApi';
+import { getAlbumDetails } from '../services/ytmusicApi';
+import { deduplicateTracks, deduplicateAlbums } from '../services/searchEngine';
+import { fetchRadio } from '../services/recommendationApi';
 import { playerStore } from '../services/playerStore';
+import { usePlayerEngine } from '../services/playerEngine';
+import { SongRow } from '../components/SongRow';
+import { SongContextMenu } from '../components/SongContextMenu';
+import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
+
 interface AlbumPageProps {
   albumId?: string;
   onPlay: (t: Track, list?: Track[]) => void;
@@ -27,53 +38,153 @@ interface AlbumPageProps {
   onBack?: () => void;
 }
 
-export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigate, onBack }) => {
+export const AlbumPage: React.FC<AlbumPageProps> = ({
+  albumId,
+  onPlay,
+  onNavigate,
+  onBack,
+}) => {
   const [album, setAlbum] = useState<Album | null>(null);
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [recommendedAlbums, setRecommendedAlbums] = useState<Album[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isAlbumFav, setIsAlbumFav] = useState(false);
+
+  // Discovery / Idle State
   const [popularAlbums, setPopularAlbums] = useState<Album[]>([]);
-  const [downloading, setDownloading] = useState(false);
-  const [isFav, setIsFav] = useState(false);
 
-  const currentPlayingId = playerStore.current()?.id;
-  const isPlaying = playerStore.current() !== null;
+  // Player Engine State
+  const { isPlaying } = usePlayerEngine();
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(() => playerStore.current());
 
+  // Context Menu & Add to Playlist Modals
+  const [menuTrack, setMenuTrack] = useState<Track | null>(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [playlistModalTracks, setPlaylistModalTracks] = useState<Track[]>([]);
+  const [isPlaylistModalOpen, setIsPlaylistModalOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Toast Auto-dismiss
   useEffect(() => {
-    if (albumId) {
-      loadAlbum(albumId);
-    } else {
-      loadPopularAlbums();
-    }
-  }, [albumId]);
+    if (!toastMessage) return;
+    const t = setTimeout(() => setToastMessage(null), 3000);
+    return () => clearTimeout(t);
+  }, [toastMessage]);
 
-  const loadAlbum = async (id: string) => {
+  // Subscribe to Player Store
+  useEffect(() => {
+    const unsub = playerStore.subscribe(() => {
+      setCurrentTrack(playerStore.current());
+    });
+    return () => {
+      unsub();
+    };
+  }, []);
+
+  // Multi-source Album loader
+  const loadAlbumData = useCallback(async (id: string) => {
     setLoading(true);
+    setAlbum(null);
+    setTracks([]);
+    setRecommendedAlbums([]);
+
     try {
-      const res = await getSaavnAlbumDetails(id);
-      if (res && res.album) {
-        setAlbum(res.album);
-        setTracks(res.tracks || []);
-      } else {
+      // 1. Fetch from JioSaavn & YT Music
+      const [saavnRes, ytRes] = await Promise.allSettled([
+        getSaavnAlbumDetails(id),
+        getAlbumDetails(id),
+      ]);
+
+      const saavnData = saavnRes.status === 'fulfilled' ? saavnRes.value : null;
+      const ytData = ytRes.status === 'fulfilled' ? ytRes.value : null;
+
+      let resolvedAlbum: Album | null = null;
+      let rawTracks: Track[] = [];
+
+      if (saavnData && saavnData.album) {
+        resolvedAlbum = saavnData.album;
+        if (saavnData.tracks?.length) rawTracks.push(...saavnData.tracks);
+      }
+
+      if (ytData && ytData.info) {
+        if (!resolvedAlbum) resolvedAlbum = ytData.info;
+        if (ytData.tracks?.length) rawTracks.push(...ytData.tracks);
+      }
+
+      // If only YT Music album was found and we have artist/album name, try finding JioSaavn 320k tracks
+      if (resolvedAlbum && !saavnData && resolvedAlbum.name) {
+        try {
+          const saavnSearch = await searchSaavnAlbums(`${resolvedAlbum.name} ${resolvedAlbum.artist?.name || ''}`, 1, 1);
+          if (saavnSearch.albums?.length && saavnSearch.albums[0].albumId) {
+            const secondarySaavn = await getSaavnAlbumDetails(saavnSearch.albums[0].albumId);
+            if (secondarySaavn && secondarySaavn.tracks?.length) {
+              rawTracks.push(...secondarySaavn.tracks);
+            }
+          }
+        } catch {}
+      }
+
+      const dedupedTracks = deduplicateTracks(rawTracks);
+      setAlbum(resolvedAlbum);
+      setTracks(dedupedTracks);
+
+      // Check if any track from album is in favorites
+      if (dedupedTracks.length > 0) {
+        const anyFav = dedupedTracks.some((t) => playerStore.isFav(t.id));
+        setIsAlbumFav(anyFav);
+      }
+
+      // Load recommended/more albums by same artist
+      if (resolvedAlbum?.artist?.name) {
+        const artistQuery = resolvedAlbum.artist.name;
+        searchSaavnAlbums(artistQuery, 1, 8)
+          .then((res) => {
+            const others = res.albums.filter((a) => a.albumId !== id);
+            setRecommendedAlbums(deduplicateAlbums(others).slice(0, 6));
+          })
+          .catch(() => {});
       }
     } catch (err) {
-      console.error('[AlbumPage] load error:', err);
+      console.error('[AlbumPage] Error loading album:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const loadPopularAlbums = async () => {
+  // Idle / Featured albums loader
+  const loadFeaturedAlbums = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await searchSaavnAlbums('Bollywood Hits');
-      setPopularAlbums(res.albums || []);
+      const modules = await getSaavnBrowseModules().catch(() => null);
+      if (modules && modules.newAlbums?.length) {
+        setPopularAlbums(modules.newAlbums);
+      } else {
+        const fallback = await searchSaavnAlbums('Trending Hits', 1, 12);
+        setPopularAlbums(fallback.albums || []);
+      }
     } catch {
       setPopularAlbums([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
+  useEffect(() => {
+    if (albumId) {
+      void loadAlbumData(albumId);
+    } else {
+      void loadFeaturedAlbums();
+    }
+  }, [albumId, loadAlbumData, loadFeaturedAlbums]);
+
+  // Total runtime calculation
+  const totalDurationSeconds = tracks.reduce((acc, t) => acc + (t.durationSeconds || 180), 0);
+  const totalDurationFormatted =
+    totalDurationSeconds > 3600
+      ? `${Math.floor(totalDurationSeconds / 3600)} hr ${Math.floor((totalDurationSeconds % 3600) / 60)} min`
+      : `${Math.floor(totalDurationSeconds / 60)} min`;
+
+  // Action Handlers
   const handlePlayAll = () => {
     if (!tracks.length) return;
     onPlay(tracks[0], tracks);
@@ -84,48 +195,67 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigat
     const shuffled = [...tracks].sort(() => Math.random() - 0.5);
     playerStore.setQueue(shuffled, 0);
     if (!playerStore.shuffle) playerStore.toggleShuffle();
+    onPlay(shuffled[0], shuffled);
   };
 
-  const handleDownloadTrack = (t: Track) => {
-    const url = t.downloadUrl || t.streamUrl;
-    if (!url) {
-      return;
-    }
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${t.title} - ${t.author}.mp3`;
-    a.target = '_blank';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const handleToggleFavAlbum = () => {
+    if (!tracks.length) return;
+    const nextState = !isAlbumFav;
+    setIsAlbumFav(nextState);
+    tracks.forEach((t) => {
+      const isCurrentlyFav = playerStore.isFav(t.id);
+      if (nextState && !isCurrentlyFav) playerStore.toggleFav(t);
+      else if (!nextState && isCurrentlyFav) playerStore.toggleFav(t);
+    });
+    setToastMessage(nextState ? 'Added album to Liked Songs' : 'Removed album from Liked Songs');
   };
 
   const handleShare = () => {
     if (navigator.share && album) {
-      navigator.share({
-        title: album.name,
-        text: `Listen to ${album.name} by ${album.artist.name} on Wave Music`,
-        url: window.location.href,
-      }).catch(() => {});
+      navigator
+        .share({
+          title: album.name,
+          text: `Listen to "${album.name}" by ${album.artist?.name || 'Various Artists'} on Wave Player`,
+          url: window.location.href,
+        })
+        .catch(() => {});
     } else {
-      navigator.clipboard.writeText(window.location.href);
+      void navigator.clipboard.writeText(window.location.href);
+      setToastMessage('Album link copied to clipboard');
     }
   };
 
-  // If no album is selected, render Album Discovery grid
+  const handleAddAllToPlaylist = () => {
+    if (!tracks.length) return;
+    setPlaylistModalTracks(tracks);
+    setIsPlaylistModalOpen(true);
+  };
+
+  const handleOpenContextMenu = (track: Track, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMenuTrack(track);
+    setIsMenuOpen(true);
+  };
+
+  const handleOpenAddToPlaylist = (track: Track) => {
+    setPlaylistModalTracks([track]);
+    setIsPlaylistModalOpen(true);
+  };
+
+  // 1. DISCOVERY / IDLE STATE (when no albumId is provided)
   if (!albumId) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 pb-20">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#86868b] flex items-center gap-1.5">
-              <Disc3 className="h-3 w-3 text-cyan-400" /> Albums
+            <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-400 flex items-center gap-1.5">
+              <Disc3 className="h-3.5 w-3.5" /> Explore Albums
             </p>
-            <h1 className="mt-1 text-[26px] sm:text-[30px] font-extrabold tracking-[-0.03em] text-white">
+            <h1 className="mt-1 text-[26px] sm:text-[32px] font-extrabold tracking-[-0.03em] text-white">
               Featured Albums
             </h1>
-            <p className="mt-1 text-[13px] text-[#86868b]">
-              Discographies
+            <p className="mt-1 text-[13px] text-[#8e8e93]">
+              Trending album releases, soundtrack collections, and top discographies
             </p>
           </div>
         </div>
@@ -135,15 +265,15 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigat
             <Loader2 className="h-8 w-8 animate-spin text-white/50" />
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
             {popularAlbums.map((a) => (
               <motion.div
                 key={a.albumId}
                 whileHover={{ y: -4 }}
                 onClick={() => onNavigate?.('album', a.albumId)}
-                className="group relative cursor-pointer lg-card p-3"
+                className="group relative cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
               >
-                <div className="relative aspect-square w-full overflow-hidden rounded-[14px] bg-[#141416] ring-1 ring-white/10">
+                <div className="relative aspect-square w-full overflow-hidden rounded-[16px] bg-[#141416] ring-1 ring-white/10">
                   <img
                     src={a.thumbnails?.[0]?.url || ''}
                     alt={a.name}
@@ -160,7 +290,7 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigat
                   <p className="truncate text-[13.5px] font-bold text-white group-hover:text-cyan-300 transition-colors">
                     {a.name}
                   </p>
-                  <p className="truncate text-[12px] text-[#86868b] mt-0.5">
+                  <p className="truncate text-[12px] text-[#8e8e93] mt-0.5">
                     {a.artist?.name || 'Various Artists'}
                   </p>
                 </div>
@@ -172,11 +302,12 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigat
     );
   }
 
-  if (loading) {
+  // 2. LOADING STATE
+  if (loading && !album) {
     return (
       <div className="flex h-96 flex-col items-center justify-center gap-3">
         <Loader2 className="h-9 w-9 animate-spin text-cyan-400" />
-        <p className="text-sm font-medium text-[#86868b]">Loading album discography...</p>
+        <p className="text-sm font-semibold text-[#8e8e93]">Loading album tracklist...</p>
       </div>
     );
   }
@@ -185,12 +316,12 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigat
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 12 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-      className="space-y-7 pb-8"
+      transition={{ duration: 0.3 }}
+      className="space-y-8 pb-24"
     >
-      {/* Back button */}
+      {/* Back Button */}
       <button
         type="button"
         onClick={() => (onBack ? onBack() : window.history.back())}
@@ -199,15 +330,17 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigat
         <ArrowLeft className="h-3.5 w-3.5" /> Back
       </button>
 
-      {/* Hero Album Header Banner */}
-      <div className="relative overflow-hidden rounded-[28px] sm:rounded-[32px] lg-hero p-6 sm:p-8 lg:p-10">
-        {/* Ambient Backdrop */}
+      {/* ======================================================= */}
+      {/* 1. ALBUM HERO BANNER */}
+      {/* ======================================================= */}
+      <div className="relative overflow-hidden rounded-[28px] sm:rounded-[36px] bg-[#121214] border border-white/10 p-6 sm:p-8 lg:p-10 shadow-[0_20px_60px_rgba(0,0,0,0.6)]">
+        {/* Ambient Blur Backdrop */}
         {coverUrl && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden">
             <img
               src={coverUrl}
               alt=""
-              className="h-full w-full object-cover scale-150 blur-[54px] opacity-35"
+              className="h-full w-full object-cover scale-150 blur-[60px] opacity-35"
             />
             <div className="absolute inset-0 bg-gradient-to-r from-black/95 via-black/80 to-black/50" />
             <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent" />
@@ -216,34 +349,34 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigat
 
         <div className="relative flex flex-col sm:flex-row items-center sm:items-end gap-6 sm:gap-8">
           {/* Cover Art */}
-          <div className="relative h-[190px] w-[190px] sm:h-[220px] sm:w-[220px] shrink-0 rounded-[22px] overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] ring-1 ring-white/20 bg-[#161619]">
+          <div className="relative h-[190px] w-[190px] sm:h-[220px] sm:w-[220px] shrink-0 rounded-[24px] overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] ring-1 ring-white/20 bg-[#161619]">
             <img
               src={coverUrl}
-              alt={album?.name}
+              alt={album?.name || 'Album'}
               className="h-full w-full object-cover"
             />
           </div>
 
           {/* Details */}
           <div className="flex flex-1 flex-col justify-end min-w-0 text-center sm:text-left">
-            <div className="inline-flex items-center justify-center sm:justify-start gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-400">
+            <div className="inline-flex items-center justify-center sm:justify-start gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-400">
               <Disc3 className="h-3.5 w-3.5" /> Official Album
             </div>
 
-            <h1 className="mt-2 text-[26px] sm:text-[34px] lg:text-[40px] font-black tracking-[-0.03em] leading-tight text-white line-clamp-2">
-              {album?.name}
+            <h1 className="mt-2 text-[26px] sm:text-[36px] lg:text-[44px] font-black tracking-[-0.03em] leading-tight text-white line-clamp-2">
+              {album?.name || 'Album'}
             </h1>
 
             <p className="mt-2 text-[15px] sm:text-[16px] font-semibold text-white/90">
               <span
                 onClick={() => album?.artist?.artistId && onNavigate?.('artist', album.artist.artistId)}
-                className="hover:underline cursor-pointer"
+                className={`transition-colors ${album?.artist?.artistId && onNavigate ? 'hover:underline hover:text-cyan-300 cursor-pointer' : ''}`}
               >
                 {album?.artist?.name || 'Various Artists'}
               </span>
             </p>
 
-            <div className="mt-3 flex flex-wrap items-center justify-center sm:justify-start gap-2 text-[12px] text-white/70">
+            <div className="mt-3 flex flex-wrap items-center justify-center sm:justify-start gap-2 text-xs text-white/70">
               {album?.year && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.08] px-2.5 py-0.5 border border-white/[0.08]">
                   <Calendar className="h-3 w-3" /> {album.year}
@@ -252,8 +385,11 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigat
               <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.08] px-2.5 py-0.5 border border-white/[0.08]">
                 <Music2 className="h-3 w-3" /> {tracks.length} {tracks.length === 1 ? 'song' : 'songs'}
               </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.08] px-2.5 py-0.5 border border-white/[0.08]">
+                <Clock className="h-3 w-3" /> {totalDurationFormatted}
+              </span>
               {album?.language && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.08] px-2.5 py-0.5 border border-white/[0.08] uppercase text-[10px] font-bold">
+                <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.08] px-2.5 py-0.5 border border-white/[0.08] uppercase text-[10px] font-bold text-cyan-300">
                   {album.language}
                 </span>
               )}
@@ -264,21 +400,47 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigat
               <button
                 type="button"
                 onClick={handlePlayAll}
-                className="flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[14px] font-bold text-black hover:bg-white/90 shadow-[0_4px_12px_rgba(0,0,0,0.4)] active:scale-95 transition-all"
+                disabled={tracks.length === 0}
+                className="flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[14px] font-bold text-black hover:bg-white/90 shadow-[0_4px_12px_rgba(0,0,0,0.4)] active:scale-95 transition-all disabled:opacity-50"
               >
-                <Play className="h-4 w-4 fill-current" /> Play All
+                <Play className="h-4 w-4 fill-current ml-0.5" /> Play All
               </button>
+
               <button
                 type="button"
                 onClick={handleShuffle}
-                className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-5 text-[14px] font-semibold text-white transition-all active:scale-95"
+                disabled={tracks.length === 0}
+                className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-5 text-[14px] font-semibold text-white transition-all active:scale-95 disabled:opacity-50"
               >
                 <Shuffle className="h-4 w-4" /> Shuffle
               </button>
+
+              <button
+                type="button"
+                onClick={handleToggleFavAlbum}
+                className={`flex h-11 w-11 items-center justify-center rounded-full border transition-all active:scale-95 ${
+                  isAlbumFav
+                    ? 'bg-red-500/20 border-red-500/40 text-red-400'
+                    : 'bg-white/[0.08] hover:bg-white/[0.14] border-white/[0.1] text-white'
+                }`}
+                title={isAlbumFav ? 'Liked' : 'Like Album'}
+              >
+                <Heart className={`h-4 w-4 ${isAlbumFav ? 'fill-red-400' : ''}`} />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleAddAllToPlaylist}
+                className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-4 text-[13px] font-semibold text-white transition-all active:scale-95"
+                title="Add all songs to playlist"
+              >
+                <Plus className="h-4 w-4" /> Add to Playlist
+              </button>
+
               <button
                 type="button"
                 onClick={handleShare}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-white transition-all"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-white transition-all active:scale-95"
                 title="Share"
               >
                 <Share2 className="h-4 w-4" />
@@ -288,82 +450,136 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({ albumId, onPlay, onNavigat
         </div>
       </div>
 
-      {/* Tracklist Table */}
-      <div className="lg-panel">
-        <div className="flex items-center justify-between px-5 sm:px-6 py-3.5 border-b border-white/[0.06] text-[11px] font-bold uppercase tracking-[0.08em] text-[#86868b]">
-          <div className="flex items-center gap-4">
-            <span className="w-6 text-center">#</span>
-            <span>Title</span>
-          </div>
-          <div className="flex items-center gap-6">
-            <span className="w-12 text-right flex items-center justify-end gap-1">
-              <Clock className="h-3 w-3" /> Time
-            </span>
-            <span className="w-16 text-right">Action</span>
-          </div>
+      {/* ======================================================= */}
+      {/* 2. ALBUM TRACKLIST */}
+      {/* ======================================================= */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between px-1">
+          <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
+            <Music2 className="h-5 w-5 text-cyan-400" /> Tracklist ({tracks.length})
+          </h2>
         </div>
 
-        <div className="divide-y divide-white/[0.04]">
-          {tracks.map((t, idx) => {
-            const isTrackActive = currentPlayingId === t.id;
-            return (
-              <div
-                key={t.id || idx}
-                onClick={() => onPlay(t, tracks)}
-                className={`group flex items-center justify-between px-4 sm:px-6 py-3.5 hover:bg-white/[0.05] transition-all cursor-pointer ${
-                  isTrackActive ? 'bg-white/[0.08]' : ''
-                }`}
-              >
-                <div className="flex items-center gap-3.5 min-w-0 flex-1 pr-3">
-                  <span className="w-6 text-center text-xs font-mono text-[#86868b] group-hover:hidden">
-                    {String(idx + 1).padStart(2, '0')}
-                  </span>
-                  <span className="hidden group-hover:flex w-6 items-center justify-center">
-                    <Play className="h-3.5 w-3.5 fill-white text-white" />
-                  </span>
-
-                  <div className="min-w-0 flex-1">
-                    <p className={`truncate text-[14px] font-semibold ${isTrackActive ? 'text-cyan-400 font-bold' : 'text-white'}`}>
-                      {t.title}
-                    </p>
-                    <p className="truncate text-[12px] text-[#86868b]">
-                      {t.author}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-4 sm:gap-6 shrink-0">
-
-                  <span className="text-[12px] font-mono text-[#86868b] w-12 text-right">
-                    {t.duration || '3:30'}
-                  </span>
-
-                  <div className="flex items-center gap-1.5 w-16 justify-end">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDownloadTrack(t);
-                      }}
-                      className="flex h-8 w-8 items-center justify-center rounded-full bg-white/[0.06] hover:bg-white/[0.14] border border-white/[0.08] text-white/80 hover:text-white transition-all"
-                      title="Download MP3"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+        <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-2 divide-y divide-white/[0.04]">
+          {tracks.map((track, idx) => (
+            <SongRow
+              key={`album-track-${track.id}-${idx}`}
+              track={track}
+              index={idx}
+              isActive={currentTrack?.id === track.id}
+              isPlaying={isPlaying}
+              onPlay={() => onPlay(track, tracks)}
+              showAlbum={false}
+              showCover={true}
+              onOpenMenu={handleOpenContextMenu}
+              onNavigate={onNavigate}
+            />
+          ))}
         </div>
       </div>
 
+      {/* ======================================================= */}
+      {/* 3. ABOUT / DESCRIPTION */}
+      {/* ======================================================= */}
       {album?.description && (
-        <div className="rounded-[20px] glass p-5 text-xs text-[#86868b] leading-relaxed">
-          <p className="font-semibold text-white/70 uppercase tracking-wider text-[10px] mb-1">About this Album</p>
-          {album.description}
+        <div className="rounded-[24px] bg-white/[0.03] border border-white/10 p-6 space-y-2">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-cyan-400">
+            About this Album
+          </p>
+          <p className="text-sm text-white/70 leading-relaxed whitespace-pre-line">
+            {album.description}
+          </p>
         </div>
       )}
+
+      {/* ======================================================= */}
+      {/* 4. MORE LIKE THIS / RECOMMENDED ALBUMS */}
+      {/* ======================================================= */}
+      {recommendedAlbums.length > 0 && (
+        <div className="space-y-3.5 pt-4">
+          <div className="flex items-center justify-between px-1">
+            <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
+              <Disc3 className="h-5 w-5 text-amber-400" /> More from {album?.artist?.name || 'this Artist'}
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            {recommendedAlbums.map((rec) => (
+              <motion.div
+                key={rec.albumId}
+                whileHover={{ y: -4 }}
+                onClick={() => onNavigate?.('album', rec.albumId)}
+                className="group cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
+              >
+                <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
+                  <img
+                    src={rec.thumbnails?.[0]?.url || ''}
+                    alt={rec.name}
+                    loading="lazy"
+                    className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500"
+                  />
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                    <span className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
+                      <Play className="h-4 w-4 fill-current ml-0.5" />
+                    </span>
+                  </div>
+                </div>
+                <p className="truncate text-xs sm:text-[13.5px] font-bold text-white mt-2 group-hover:text-amber-300 transition-colors">
+                  {rec.name}
+                </p>
+                <p className="truncate text-[11px] text-[#8e8e93] mt-0.5">
+                  {rec.year ? `${rec.year} • ` : ''}Album
+                </p>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Song Context Menu (⋮) */}
+      <SongContextMenu
+        isOpen={isMenuOpen}
+        onClose={() => {
+          setIsMenuOpen(false);
+          setMenuTrack(null);
+        }}
+        track={menuTrack}
+        onPlay={() => {
+          if (menuTrack) onPlay(menuTrack, tracks);
+        }}
+        onOpenAddToPlaylist={handleOpenAddToPlaylist}
+        onNavigate={onNavigate}
+        onShowToast={(msg) => setToastMessage(msg)}
+      />
+
+      {/* Add To Playlist Modal */}
+      <AddToPlaylistModal
+        isOpen={isPlaylistModalOpen}
+        onClose={() => {
+          setIsPlaylistModalOpen(false);
+          setPlaylistModalTracks([]);
+        }}
+        tracks={playlistModalTracks}
+        onSuccess={(plTitle, count) => {
+          setToastMessage(`Added ${count} ${count === 1 ? 'song' : 'songs'} to "${plTitle}"`);
+        }}
+      />
+
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 30, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
+            className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
+          >
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            <span>{toastMessage}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 };

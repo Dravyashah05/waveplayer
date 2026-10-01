@@ -1,11 +1,10 @@
-import { UserRound, Music2, Heart, Clock, Shield } from 'lucide-react';
+import { Music2, Heart, Clock, Shield, CheckCircle2, Sparkles } from 'lucide-react';
 import { playerStore } from '../services/playerStore';
 import { settingsStore } from '../services/settingsStore';
 import { GoogleAccountCard } from '../components/GoogleAccountCard';
 import { useGoogleAccount } from '../hooks/useGoogleAccount';
+import { UserAvatar } from '../components/UserAvatar';
 import { useState, useEffect } from 'react';
-
-const DEFAULT_AVATAR = 'https://i.pravatar.cc/100?img=12';
 
 export const ProfilePage: React.FC = () => {
   const { connected, user, youtubeConnected } = useGoogleAccount();
@@ -14,6 +13,7 @@ export const ProfilePage: React.FC = () => {
   const queue = playerStore.queue();
   const [glassEnabled, setGlassEnabled] = useState(() => settingsStore.get().glassEnabled);
   const [glassIntensity, setGlassIntensity] = useState(() => settingsStore.get().glassIntensity);
+
   useEffect(() => {
     const unsub = settingsStore.subscribe(() => {
       setGlassEnabled(settingsStore.get().glassEnabled);
@@ -21,6 +21,7 @@ export const ProfilePage: React.FC = () => {
     });
     return () => { unsub(); };
   }, []);
+
   const blurPx = glassEnabled ? Math.round((glassIntensity / 100) * 18) : 0;
   const cardBg = glassEnabled ? `rgba(255,255,255,${(0.04 + (glassIntensity / 100) * 0.06).toFixed(3)})` : 'rgba(24,24,24,0.98)';
   const cardStyle = glassEnabled
@@ -29,12 +30,40 @@ export const ProfilePage: React.FC = () => {
 
   return (
     <div className="space-y-5">
-      <div className="rounded-xl border border-white/10 lg-surface p-4 flex items-center gap-4" style={cardStyle}>
-        <img src={user?.picture || DEFAULT_AVATAR} alt="Profile" className="h-14 w-14 rounded-full object-cover ring-1 ring-white/20 shadow-[0_4px_12px_rgba(0,0,0,0.3)]" referrerPolicy="no-referrer" />
-        <div className="min-w-0">
-          <h2 className="text-[18px] font-bold text-white leading-none truncate">{user?.name || 'Wave User'}</h2>
-          <p className="text-[12px] text-white/60 truncate">{user ? `${user.email} • Premium` : 'wave@music.app • Premium'}</p>
-          <p className="text-[11px] text-white/30">{connected ? (youtubeConnected ? 'Google • YouTube connected' : 'Google connected') : 'Member since 2024'}</p>
+      <div className="rounded-2xl border border-white/10 lg-surface p-4 sm:p-5 flex items-center gap-4" style={cardStyle}>
+        <UserAvatar
+          user={user}
+          sizeClass="h-16 w-16"
+          iconSizeClass="h-7 w-7"
+          textSizeClass="text-2xl font-black"
+          showStatus={connected}
+        />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex items-center gap-2">
+            <h2 className="text-[19px] sm:text-[20px] font-bold text-white leading-tight truncate">
+              {user?.name || (connected ? 'Google User' : 'Wave User')}
+            </h2>
+            {connected && (
+              <span className="shrink-0 flex items-center justify-center h-4 w-4 rounded-full bg-emerald-500/20 text-emerald-400" title="Verified Google Account">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              </span>
+            )}
+          </div>
+          <p className="text-[12.5px] text-white/60 truncate font-medium">
+            {user?.email ? `${user.email} • Wave Premium` : 'wave@music.app • Premium'}
+          </p>
+          <div className="flex items-center gap-1.5 pt-0.5">
+            {connected ? (
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                {youtubeConnected ? 'Google & YouTube Connected' : 'Google Connected'}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-medium bg-white/5 text-white/40 border border-white/10">
+                Guest Mode • Member since 2024
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -65,8 +94,10 @@ export const ProfilePage: React.FC = () => {
       </div>
 
       <div className="rounded-xl border border-white/10 lg-surface p-3 flex items-center gap-2" style={cardStyle}>
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black"><UserRound className="h-4 w-4" /></span>
-        <p className="text-xs text-white/50">Wave • Minimal profile • Edit coming soon</p>
+        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black"><Sparkles className="h-4 w-4" /></span>
+        <p className="text-xs text-white/60">
+          {connected && user ? `Signed in as ${user.name} (${user.email})` : 'Wave • Minimal profile • Sign in with Google to sync'}
+        </p>
       </div>
     </div>
   );

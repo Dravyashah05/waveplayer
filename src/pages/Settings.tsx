@@ -4,6 +4,7 @@ import { settingsStore, AppSettings, Quality, Theme } from '../services/settings
 import { playerStore } from '../services/playerStore';
 import { GoogleAccountCard } from '../components/GoogleAccountCard';
 import { useGoogleAccount } from '../hooks/useGoogleAccount';
+import { UserAvatar } from '../components/UserAvatar';
 const Toggle: React.FC<{ value: boolean; onChange: () => void }> = ({ value, onChange }) => (
   <button onClick={onChange} className={`relative inline-flex h-6 w-11 items-center rounded-full border ${value ? 'bg-white border-white' : 'bg-white/10 border-white/10'}`}>
     <span className={`inline-block h-4 w-4 rounded-full shadow transition-transform ${value ? 'translate-x-6 bg-black' : 'translate-x-1 bg-white'}`} />
@@ -62,10 +63,16 @@ export const SettingsPage: React.FC = () => {
       </div>
 
       <div className="rounded-2xl border border-white/10 lg-surface p-4 flex items-center gap-3" style={glassCardStyle}>
-        <img src={user?.picture || 'https://i.pravatar.cc/100?img=12'} alt="Profile" className="h-10 w-10 rounded-full object-cover ring-1 ring-white/15" referrerPolicy="no-referrer" />
+        <UserAvatar
+          user={user}
+          sizeClass="h-10 w-10"
+          iconSizeClass="h-5 w-5"
+          textSizeClass="text-sm font-bold"
+          showStatus={!!user}
+        />
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-bold text-white leading-none truncate">{user?.name || 'Wave User'}</p>
-          <p className="text-[11px] text-white/60 truncate">{user ? `${user.email} • Premium` : 'wave@music.app • Premium'}</p>
+          <p className="text-[11px] text-white/60 truncate">{user ? `${user.email} • Wave Premium` : 'wave@music.app • Premium'}</p>
         </div>
         <span className="rounded-full bg-white text-black px-2.5 py-1 text-[10px] font-bold">Profile</span>
       </div>

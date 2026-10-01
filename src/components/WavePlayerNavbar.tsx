@@ -3,6 +3,7 @@ import { NavOptions } from './NavOptions';
 import { useState, useEffect, useRef } from 'react';
 import { settingsStore } from '../services/settingsStore';
 import { googleLogout, useGoogleAccount } from '../hooks/useGoogleAccount';
+import { UserAvatar } from './UserAvatar';
 
 interface Props {
   query: string;
@@ -274,9 +275,18 @@ export const WavePlayerNavbar: React.FC<Props> = ({ query, onQueryChange, onSear
           </div>
 
           <div className="relative shrink-0" ref={profileRef}>
-            <button onClick={() => setProfileOpen(v => !v)} className="relative flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full overflow-hidden bg-[#1a1a1a] ring-1 ring-white/15 hover:ring-white/25 shadow-[0_4px_16px_rgba(0,0,0,0.2)]">
-              <img src={accountUser?.picture || 'https://i.pravatar.cc/100?img=12'} alt="Profile" className="h-full w-full object-cover" referrerPolicy="no-referrer" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
-              <span className="absolute inset-0 grid place-items-center bg-[#1a1a1a] text-white/60"><UserRound className="h-4 w-4" /></span>
+            <button
+              onClick={() => setProfileOpen(v => !v)}
+              className="relative flex items-center justify-center rounded-full hover:scale-105 active:scale-95 transition-all"
+              title={accountUser?.name ? `Signed in as ${accountUser.name}` : 'Profile'}
+            >
+              <UserAvatar
+                user={accountUser}
+                sizeClass="h-9 w-9 sm:h-10 sm:w-10"
+                iconSizeClass="h-4 w-4"
+                textSizeClass="text-xs font-bold"
+                showStatus={accountConnected}
+              />
             </button>
             {profileOpen && (
                 <div
@@ -295,11 +305,17 @@ export const WavePlayerNavbar: React.FC<Props> = ({ query, onQueryChange, onSear
                   }
                 >
                   <div className="p-4 flex items-center gap-3">
-                    <img src={accountUser?.picture || 'https://i.pravatar.cc/100?img=12'} alt="Profile" className="h-10 w-10 rounded-full object-cover ring-1 ring-white/10" referrerPolicy="no-referrer" />
+                    <UserAvatar
+                      user={accountUser}
+                      sizeClass="h-10 w-10"
+                      iconSizeClass="h-5 w-5"
+                      textSizeClass="text-sm font-bold"
+                      showStatus={accountConnected}
+                    />
                     <div className="min-w-0 flex-1">
                       <p className="text-[14px] font-bold tracking-[-0.01em] text-white leading-none truncate">{accountUser?.name || 'Wave User'}</p>
                       <p className="text-[12px] font-medium text-white/60 truncate">{accountUser?.email || 'wave@music.app'}</p>
-                      <p className="text-[11px] font-medium text-white/30">{accountConnected ? 'Google • Wave' : 'Premium • Wave'}</p>
+                      <p className="text-[11px] font-medium text-white/30">{accountConnected ? 'Google • Connected' : 'Guest • Wave'}</p>
                     </div>
                   </div>
                   <div className="h-px bg-white/10 mx-4" />

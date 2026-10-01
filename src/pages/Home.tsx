@@ -13,12 +13,14 @@ import {
   Sparkles,
   Loader2,
   TrendingUp,
+  Radio,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Track, Album, Playlist, SearchArtist } from '../types';
 import { playerStore } from '../services/playerStore';
 import { getSaavnBrowseModules, searchSaavnArtists } from '../services/saavnApi';
 import { recommendTracks, getSimilarTracks, getDiscoverTracks } from '../services/recommendationEngine';
+import { fetchQuickPicks, fetchRadio } from '../services/recommendationApi';
 import { getProfile } from '../services/userProfile';
 
 function getGreeting() {
@@ -70,7 +72,9 @@ const RailHeader: React.FC<{
   icon?: React.ReactNode;
   actionText?: string;
   onAction?: () => void;
-}> = ({ title, subtitle, icon, actionText, onAction }) => (
+  action2Text?: string;
+  onAction2?: () => void;
+}> = ({ title, subtitle, icon, actionText, onAction, action2Text, onAction2 }) => (
   <div className="flex items-end justify-between gap-4">
     <div className="min-w-0">
       <h2 className="flex items-center gap-2 text-[16px] sm:text-[18px] font-bold tracking-[-0.02em] text-white">
@@ -83,15 +87,26 @@ const RailHeader: React.FC<{
       </h2>
       {subtitle && <p className="mt-0.5 text-[12.5px] font-medium text-[#8e8e93]">{subtitle}</p>}
     </div>
-    {onAction && (
-      <button
-        type="button"
-        onClick={onAction}
-        className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] border border-white/[0.08] px-3 sm:px-3.5 py-1.5 text-xs font-semibold text-white/80 hover:bg-white hover:text-black transition-all shrink-0"
-      >
-        {actionText || 'See all'} <ChevronRight className="h-3 w-3" />
-      </button>
-    )}
+    <div className="flex items-center gap-2 shrink-0">
+      {onAction2 && (
+        <button
+          type="button"
+          onClick={onAction2}
+          className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] border border-white/[0.08] px-3 sm:px-3.5 py-1.5 text-xs font-semibold text-white/80 hover:bg-white hover:text-black transition-all shrink-0"
+        >
+          <Radio className="h-3 w-3" /> {action2Text || 'Radio'}
+        </button>
+      )}
+      {onAction && (
+        <button
+          type="button"
+          onClick={onAction}
+          className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] border border-white/[0.08] px-3 sm:px-3.5 py-1.5 text-xs font-semibold text-white/80 hover:bg-white hover:text-black transition-all shrink-0"
+        >
+          {actionText || 'See all'} <ChevronRight className="h-3 w-3" />
+        </button>
+      )}
+    </div>
   </div>
 );
 
@@ -117,12 +132,30 @@ export const HomePage: React.FC<{
   const [discoverTracks, setDiscoverTracks] = useState<Track[]>([]);
   const [trendingForYou, setTrendingForYou] = useState<Track[]>([]);
   const [youMayLike, setYouMayLike] = useState<Track[]>([]);
+  const [quickPicks, setQuickPicks] = useState<Track[]>([]);
+  const [startingRadio, setStartingRadio] = useState(false);
+
+  const startRadio = async (seed: Track | null) => {
+    if (!seed || startingRadio) return;
+    setStartingRadio(true);
+    try {
+      const tracks = await fetchRadio(seed, 20);
+      if (tracks.length) onPlay(tracks[0], tracks);
+    } finally {
+      setStartingRadio(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
     async function loadHomeData() {
       setLoading(true);
       try {
+        const profile = getProfile();
+        const favArtist = profile.favoriteArtist
+          || playerStore.historyList()[0]?.author?.split(',')[0]?.trim()
+          || playerStore.favsList()[0]?.author?.split(',')[0]?.trim()
+          || '';
         const [browseRes, artistRes] = await Promise.all([
           getSaavnBrowseModules().catch(() => ({
             trending: [],
@@ -130,7 +163,7 @@ export const HomePage: React.FC<{
             newAlbums: [],
             charts: [],
           })),
-          searchSaavnArtists('Arijit Singh').catch(() => ({ total: 0, artists: [] })),
+          favArtist ? searchSaavnArtists(favArtist).catch(() => ({ total: 0, artists: [] })) : Promise.resolve({ total: 0, artists: [] }),
         ]);
 
         if (cancelled) return;
@@ -169,6 +202,16 @@ export const HomePage: React.FC<{
       setRecommendedSeed(seed);
       setRecLoading(true);
       try {
+        // Quick Picks — server endpoint (YouTube Music relations + taste),
+        // falling back to the on-device engine when offline/unreachable.
+        const qp = await fetchQuickPicks(10).catch(() => null);
+        if (!cancelled) {
+          if (qp && qp.length) setQuickPicks(qp);
+          else {
+            const fallback = await recommendTracks({ seedTrack: seed, limit: 10, weights: { taste: 0.4, similarity: 0.2, collaborative: 0.15, popularity: 0.15, discovery: 0.1 } }).catch(() => [] as Track[]);
+            setQuickPicks(fallback as Track[]);
+          }
+        }
         // Made For You — full hybrid (taste 35%, similarity 25%, collab 20%, pop 10%, discovery 10%)
         const madeForYou = await recommendTracks({ seedTracks: seedPool, limit: 12 }).catch(() => []);
         if (cancelled) return;
@@ -396,6 +439,39 @@ export const HomePage: React.FC<{
         </div>
       )}
 
+      {/* Quick Picks — YouTube Music relations + taste, one-tap play */}
+      {quickPicks.length > 0 && (
+        <div className="space-y-3.5">
+          <RailHeader
+            title="Quick Picks"
+            subtitle="Jump back in"
+            icon={<Flame className="h-3.5 w-3.5 text-orange-400" />}
+            actionText="Play all"
+            onAction={() => quickPicks.length && onPlay(quickPicks[0], quickPicks)}
+            action2Text={startingRadio ? 'Starting…' : 'Radio'}
+            onAction2={() => void startRadio(quickPicks[0] || recommendedSeed)}
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+            {quickPicks.slice(0, 8).map((t) => (
+              <button
+                key={`qp-${t.id}`}
+                onClick={() => onPlay(t, quickPicks)}
+                className="group flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-white/[0.05] transition-colors"
+              >
+                <img src={t.thumbnail} alt={t.title} loading="lazy" className="h-12 w-12 rounded-lg object-cover bg-[#18181b] ring-1 ring-white/[0.08]" referrerPolicy="no-referrer" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] font-bold text-white leading-tight">{t.title}</span>
+                  <span className="block truncate text-[11.5px] font-medium text-[#8e8e93] mt-0.5">{t.author}</span>
+                </span>
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/[0.06] text-white/70 opacity-0 transition-opacity group-hover:opacity-100">
+                  <Play className="h-3.5 w-3.5 fill-current ml-0.5" />
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Personalized — Made for you */}
       {recommended.length > 0 && (
         <div className="space-y-3.5">
@@ -405,6 +481,8 @@ export const HomePage: React.FC<{
             icon={<Sparkles className="h-3.5 w-3.5 text-amber-400" />}
             actionText={recLoading ? 'Updating…' : 'Play mix'}
             onAction={() => recommended.length && onPlay(recommended[0], recommended)}
+            action2Text={startingRadio ? 'Starting…' : 'Radio'}
+            onAction2={() => void startRadio(recommendedSeed)}
           />
           <div className="flex gap-3.5 sm:gap-4 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-none snap-x snap-mandatory">
             {recommended.map((t) => (
@@ -437,7 +515,7 @@ export const HomePage: React.FC<{
       {/* Because You Listened To */}
       {becauseTracks.length > 0 && becauseSeed && (
         <div className="space-y-3.5">
-          <RailHeader title={`Because you listened to ${becauseSeed.title.slice(0, 20)}`} subtitle={`More ${becauseSeed.author?.split(',')[0] || ''} • Similar songs`} icon={<Heart className="h-3.5 w-3.5 text-rose-400" />} actionText="Play" onAction={() => onPlay(becauseTracks[0], becauseTracks)} />
+          <RailHeader title={`Because you listened to ${becauseSeed.title.slice(0, 20)}`} subtitle={`More ${becauseSeed.author?.split(',')[0] || ''} • Similar songs`} icon={<Heart className="h-3.5 w-3.5 text-rose-400" />} actionText="Play" onAction={() => onPlay(becauseTracks[0], becauseTracks)} action2Text={startingRadio ? 'Starting…' : 'Radio'} onAction2={() => void startRadio(becauseSeed)} />
           <div className="flex gap-3.5 sm:gap-4 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-none snap-x">
             {becauseTracks.map(t => (
               <div key={`because-${t.id}`} onClick={() => onPlay(t, becauseTracks)} className="snap-start group cursor-pointer min-w-[155px] w-[155px] sm:min-w-[165px] sm:w-[165px] shrink-0">

@@ -3,6 +3,7 @@ import express from 'express';
 import YTMusic from 'ytmusic-api';
 import { resolveYouTubeAudio, YOUTUBE_VIDEO_ID } from './youtubeStream.js';
 import { registerYoutubeRoutes } from './googleYouTube.js';
+import { registerRecommendationRoutes } from './recommendation/index.js';
 import { pathToFileURL } from 'node:url';
 
 const app = express();
@@ -30,6 +31,7 @@ async function getYTMusic(): Promise<YTMusic> {
   await initPromise;
   return ytmusic!;
 }
+registerRecommendationRoutes(app, async () => getYTMusic() as unknown as import('./recommendation/candidates.js').YTMusicLike);
 
 // --- LRC parsing ---
 function parseLRC(lrc: string): Array<{ time: number; text: string }> {

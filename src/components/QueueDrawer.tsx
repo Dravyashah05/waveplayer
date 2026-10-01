@@ -20,6 +20,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { settingsStore } from '../services/settingsStore';
 import { playerStore } from '../services/playerStore';
 import { getUpNext } from '../services/recommendationEngine';
+import { fetchAutoplay } from '../services/recommendationApi';
+import { isAutoplayEnabled, setAutoplayEnabled, subscribeAutoplay } from '../services/autoplay';
 
 interface Props {
   open: boolean;
@@ -50,6 +52,9 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
   const [showHistory, setShowHistory] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const [autoplay, setAutoplay] = useState(() => isAutoplayEnabled());
+
+  useEffect(() => subscribeAutoplay(() => setAutoplay(isAutoplayEnabled())), []);
 
   useEffect(() => {
     const unsub = settingsStore.subscribe(() => {
@@ -72,12 +77,29 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
     const exclude = new Set(queue.map((t) => t.id));
     // Blend the upcoming tail so Up Next flows toward what's already queued
     const tail = queue.slice(currentIndex + 1, currentIndex + 3);
-    getUpNext(cur as any, exclude, 8, tail)
+    // Server endpoint first (YouTube Music relations + ranking), on-device
+    // engine as fallback — identical shape either way.
+    const serverFirst = (async () => {
+      if (!cur.id || !/^[a-zA-Z0-9_-]{11}$/.test(cur.id)) throw new Error('no-yt-id');
+      const tracks = await fetchAutoplay(cur as any, [...exclude], 8);
+      if (!tracks.length) throw new Error('empty');
+      const tailTracks = tail.length ? await getUpNext(cur as any, exclude, 8, tail).catch(() => [] as Track[]) : [];
+      const merged = [...tracks];
+      for (const t of tailTracks) if (t?.id && !merged.some((m) => m.id === t.id)) merged.push(t);
+      return merged.slice(0, 8);
+    })();
+    serverFirst
       .then((tracks) => {
         if (!cancelled) setUpNext(tracks as Track[]);
       })
       .catch(() => {
-        if (!cancelled) setUpNext([]);
+        getUpNext(cur as any, exclude, 8, tail)
+          .then((tracks) => {
+            if (!cancelled) setUpNext(tracks as Track[]);
+          })
+          .catch(() => {
+            if (!cancelled) setUpNext([]);
+          });
       })
       .finally(() => {
         if (!cancelled) setUpLoading(false);
@@ -198,6 +220,14 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => setAutoplayEnabled(!autoplay)}
+                    title={autoplay ? 'Autoplay on — keeps the music going' : 'Autoplay off'}
+                    className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold transition-colors ${autoplay ? 'border-white bg-white text-black shadow' : 'border-white/10 bg-white/[0.06] text-white/70 hover:bg-white hover:text-black hover:border-white'}`}
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Autoplay</span>
+                  </button>
                   {queue.length > 1 && (
                     <button
                       onClick={() => playerStore.toggleShuffle()}

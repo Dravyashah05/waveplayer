@@ -3,13 +3,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Heart, Disc3, Music, ListMusic, Download, LayoutGrid, List, Play, Plus, Sparkles, Mic2 } from 'lucide-react';
 import { playerStore } from '../services/playerStore';
 import { createYTMusicPlaylist, checkYTMusicAuth } from '../services/ytmusicApi';
+import { buildImportPreview, buildWavePlaylist, fetchAllYoutubeItems, isReauthError, reauthMessage, type ImportPreview, type Progress, type YoutubeItem } from '../services/youtubeImport';
 import { Track } from '../types';
 import { SongRow } from '../components/SongRow';
 import { NoContent } from '../components/NoContent';
 
 type TabId = 'playlists' | 'songs' | 'albums' | 'artists' | 'favs' | 'downloads';
 type View = 'grid' | 'list';
-type YouTubePlaylist = { id: string; title: string; description: string; thumbnail: string; itemCount: number; privacy: string };
+type YouTubePlaylist = { id: string; title: string; description: string; thumbnail: string; channelTitle?: string; itemCount: number; privacy: string };
 
 export const LibraryPage: React.FC<{ onPlay: (t: Track, list?: Track[]) => void; initialTab?: TabId }> = ({ onPlay, initialTab = 'playlists' }) => {
   const [view, setView] = useState<View>('grid');
@@ -31,6 +32,15 @@ export const LibraryPage: React.FC<{ onPlay: (t: Track, list?: Track[]) => void;
   const [youtubeConnected, setYoutubeConnected] = useState(false);
   const [youtubeLoading, setYoutubeLoading] = useState(false);
   const [youtubeMessage, setYoutubeMessage] = useState('');
+  const [expandedYtId, setExpandedYtId] = useState<string | null>(null);
+  const [ytItemsCache, setYtItemsCache] = useState<Record<string, YoutubeItem[]>>({});
+  const [ytTracksLoading, setYtTracksLoading] = useState(false);
+  const [previewPlaylist, setPreviewPlaylist] = useState<YouTubePlaylist | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [previewProgress, setPreviewProgress] = useState<Progress | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const [importing, setImporting] = useState(false);
   useEffect(() => {
     const unsub = playerStore.subscribe(() => {
       setFavs([...playerStore.favsList()]);
@@ -46,28 +56,77 @@ export const LibraryPage: React.FC<{ onPlay: (t: Track, list?: Track[]) => void;
       const status = await fetch('/api/auth/youtube/status', { credentials: 'include' }).then(r => r.json());
       setYoutubeConnected(!!status.connected);
       if (!status.connected) { setYoutubePlaylists([]); return; }
-      const response = await fetch(`/api/youtube/playlists?maxResults=50${refresh ? '&refresh=1' : ''}`, { credentials: 'include' });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Could not load YouTube playlists.');
-      setYoutubePlaylists(data.items || []);
-    } catch (error: any) { setYoutubeMessage(error.message || 'Could not load YouTube playlists.'); }
+      // Follow YouTube pageTokens — never assume the first page holds everything.
+      const all: YouTubePlaylist[] = [];
+      let pageToken: string | null = null;
+      for (let page = 0; page < 5; page++) {
+        const qs = new URLSearchParams({ maxResults: '50' });
+        if (refresh) qs.set('refresh', '1');
+        if (pageToken) qs.set('pageToken', pageToken);
+        const response = await fetch(`/api/youtube/playlists?${qs}`, { credentials: 'include' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Could not load YouTube playlists.');
+        all.push(...(data.items || []));
+        pageToken = data.nextPageToken || null;
+        if (!pageToken) break;
+      }
+      setYoutubePlaylists(all);
+    } catch (error: any) {
+      if (isReauthError(error)) { setYoutubeConnected(false); setYoutubePlaylists([]); setYoutubeMessage(reauthMessage()); }
+      else setYoutubeMessage(error.message || 'Could not load YouTube playlists.');
+    }
     finally { setYoutubeLoading(false); }
   };
   useEffect(() => { void loadYoutubePlaylists(); }, []);
-  const getYoutubeTracks = async (playlist: YouTubePlaylist) => {
-    const response = await fetch(`/api/youtube/playlists/${encodeURIComponent(playlist.id)}/items?maxResults=50`, { credentials: 'include' });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Could not load playlist tracks.');
-    return (data.items || []).filter((item: any) => item.videoId).map((item: any): Track => ({ id: item.videoId, title: item.title, author: item.artist || 'YouTube channel', thumbnail: item.thumbnail || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`, duration: '', durationSeconds: 0, url: `https://www.youtube.com/watch?v=${item.videoId}`, source: 'youtube', type: 'VIDEO' }));
-  };
-  const importYoutubePlaylist = async (playlist: YouTubePlaylist) => {
+  const loadYoutubeItems = async (playlistId: string): Promise<YoutubeItem[]> => {
+    const cached = ytItemsCache[playlistId];
+    if (cached) return cached;
+    setYtTracksLoading(true);
     try {
-      const songs = await getYoutubeTracks(playlist);
+      const { items } = await fetchAllYoutubeItems(playlistId);
+      setYtItemsCache(prev => ({ ...prev, [playlistId]: items }));
+      return items;
+    } catch (error: any) {
+      if (isReauthError(error)) { setYoutubeConnected(false); setYoutubeMessage(reauthMessage()); }
+      throw error;
+    } finally { setYtTracksLoading(false); }
+  };
+  const itemToTrack = (item: YoutubeItem): Track | null => {
+    if (!item.videoId) return null;
+    return { id: item.videoId, title: item.title || 'Unknown title', author: item.channelTitle || item.artist || 'YouTube', thumbnail: item.thumbnail || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`, duration: '', durationSeconds: 0, url: `https://www.youtube.com/watch?v=${item.videoId}`, source: 'youtube', type: 'VIDEO' };
+  };
+  const getYoutubeTracks = async (playlist: YouTubePlaylist) => {
+    const items = await loadYoutubeItems(playlist.id);
+    return items.map(itemToTrack).filter((t): t is Track => !!t);
+  };
+  const openImportPreview = async (playlist: YouTubePlaylist) => {
+    setPreviewPlaylist(playlist); setPreview(null); setPreviewProgress(null); setPreviewError(''); setPreviewBusy(true);
+    try {
+      const items = await loadYoutubeItems(playlist.id);
+      if (!items.length) { setPreviewError('This playlist is empty on YouTube.'); return; }
+      const data = await buildImportPreview(items, setPreviewProgress);
+      setPreview(data);
+    } catch (error: any) {
+      setPreviewError(isReauthError(error) ? reauthMessage() : (error.message || 'Could not load playlist tracks.'));
+    } finally { setPreviewBusy(false); }
+  };
+  const closePreview = () => { setPreviewPlaylist(null); setPreview(null); setPreviewProgress(null); setPreviewError(''); setPreviewBusy(false); setImporting(false); };
+  const confirmImport = async (includePossible: boolean) => {
+    if (!previewPlaylist || !preview || importing) return;
+    setImporting(true);
+    try {
+      const chosen = [...preview.matched, ...(includePossible ? preview.possible : [])];
+      if (!chosen.length) { setPreviewError('No matched songs to import.'); return; }
       const raw = localStorage.getItem('wave:local_playlists'); const local = raw ? JSON.parse(raw) : [];
-      const imported = { id: `LOCAL_YT_${playlist.id}`, title: playlist.title, description: playlist.description, songs, createdAt: new Date().toISOString(), source: 'youtube-import', youtubePlaylistId: playlist.id };
-      const next = [...local.filter((p: any) => p.id !== imported.id), imported];
-      localStorage.setItem('wave:local_playlists', JSON.stringify(next)); setLocalPlaylists(next); setYoutubeMessage(`Imported “${playlist.title}” into Wave.`);
-    } catch (error: any) { setYoutubeMessage(error.message || 'Import failed.'); }
+      const targetId = `LOCAL_YT_${previewPlaylist.id}`;
+      const existing = local.find((p: any) => p.id === targetId) || null;
+      const merged = buildWavePlaylist(previewPlaylist, chosen, existing);
+      const next = [...local.filter((p: any) => p.id !== targetId), merged];
+      localStorage.setItem('wave:local_playlists', JSON.stringify(next)); setLocalPlaylists(next);
+      setYoutubeMessage(`Imported “${previewPlaylist.title}” into Wave (${chosen.length} tracks).`);
+      closePreview();
+    } catch (error: any) { setPreviewError(error.message || 'Import failed.'); }
+    finally { setImporting(false); }
   };
   useEffect(() => {
     const onStorage = () => { try { const raw = localStorage.getItem('wave:local_playlists'); setLocalPlaylists(raw ? JSON.parse(raw) : []); } catch {} };
@@ -158,14 +217,56 @@ export const LibraryPage: React.FC<{ onPlay: (t: Track, list?: Track[]) => void;
               <div className="rounded-[20px] glass-card p-4 sm:p-5 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="text-[13px] font-bold text-white">YouTube Playlists</h3><p className="mt-1 text-xs text-white/50">Browse and import playlists from your connected account.</p></div><div className="flex gap-2">{!youtubeConnected && <button onClick={() => location.assign('/api/auth/youtube/connect')} className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-black">Connect YouTube</button>}<button onClick={() => void loadYoutubePlaylists(true)} disabled={youtubeLoading} className="rounded-full border border-white/10 px-3 py-2 text-xs text-white/75">{youtubeLoading ? 'Loading…' : 'Refresh'}</button></div></div>
                 {youtubeMessage && <p role="status" className="text-xs text-white/60">{youtubeMessage}</p>}
-                {youtubePlaylists.map(playlist => <div key={playlist.id} className="flex items-center gap-3 rounded-xl border border-white/5 bg-black/20 p-2.5">
-                  <img src={playlist.thumbnail || `https://i.ytimg.com/vi/${playlist.id}/default.jpg`} alt="" className="h-12 w-12 rounded-lg object-cover bg-white/5" />
-                  <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-white">{playlist.title}<span className="ml-2 rounded-full bg-red-400/10 px-1.5 py-0.5 text-[10px] text-red-300">YouTube</span></p><p className="truncate text-xs text-white/45">{playlist.itemCount} tracks · {playlist.privacy}</p></div>
-                  <button onClick={async () => { try { const tracks = await getYoutubeTracks(playlist); if (tracks.length) onPlay(tracks[0], tracks); else setYoutubeMessage('This playlist has no playable videos.'); } catch (error: any) { setYoutubeMessage(error.message); } }} className="rounded-full border border-white/10 px-3 py-2 text-xs text-white">Play</button>
-                  <button onClick={() => void importYoutubePlaylist(playlist)} className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-black">Import</button>
-                </div>)}
+                {youtubePlaylists.map(playlist => {
+                  const expanded = expandedYtId === playlist.id;
+                  const items = ytItemsCache[playlist.id] || [];
+                  return <div key={playlist.id} className="rounded-xl border border-white/5 bg-black/20 p-2.5">
+                    <div className="flex items-center gap-3">
+                      <img src={playlist.thumbnail || `https://i.ytimg.com/vi/${playlist.id}/default.jpg`} alt="" className="h-12 w-12 rounded-lg object-cover bg-white/5" />
+                      <button onClick={async () => { if (expanded) { setExpandedYtId(null); return; } setExpandedYtId(playlist.id); try { await loadYoutubeItems(playlist.id); } catch (error: any) { setYoutubeMessage(isReauthError(error) ? reauthMessage() : error.message); } }} className="min-w-0 flex-1 text-left"><p className="truncate text-sm font-semibold text-white">{playlist.title}<span className="ml-2 rounded-full bg-red-400/10 px-1.5 py-0.5 text-[10px] text-red-300">YouTube</span></p><p className="truncate text-xs text-white/45">{playlist.itemCount} tracks · {playlist.privacy}{playlist.channelTitle ? ` · ${playlist.channelTitle}` : ''}</p></button>
+                      <button onClick={async () => { try { const tracks = await getYoutubeTracks(playlist); if (tracks.length) onPlay(tracks[0], tracks); else setYoutubeMessage('This playlist has no playable videos.'); } catch (error: any) { setYoutubeMessage(isReauthError(error) ? reauthMessage() : error.message); } }} className="rounded-full border border-white/10 px-3 py-2 text-xs text-white">Play</button>
+                      <button onClick={() => void openImportPreview(playlist)} className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-black">Import</button>
+                    </div>
+                    {expanded && <div className="mt-2 max-h-56 overflow-y-auto divide-y divide-white/5 rounded-lg bg-black/30">
+                      {ytTracksLoading && items.length === 0 ? <p className="px-3 py-2 text-xs text-white/45">Loading tracks…</p> : items.length === 0 ? <p className="px-3 py-2 text-xs text-white/45">No tracks found.</p> : items.map(item => <button key={item.id} onClick={async () => { const t = itemToTrack(item); if (t) { const tracks = (await getYoutubeTracks(playlist).catch(() => [] as Track[])); onPlay(t, tracks.length ? tracks : [t]); } }} className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5"><img src={item.thumbnail || `https://i.ytimg.com/vi/${item.videoId || ''}/default.jpg`} alt="" className="h-8 w-8 rounded-md object-cover bg-white/5" /><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium text-white">{item.title || 'Unknown title'}</span><span className="block truncate text-[11px] text-white/45">{item.channelTitle || item.artist || 'YouTube'}</span></span><Play className="h-3.5 w-3.5 shrink-0 text-white/40" /></button>)}
+                    </div>}
+                  </div>;
+                })}
                 {youtubeConnected && !youtubeLoading && youtubePlaylists.length === 0 && !youtubeMessage && <p className="text-xs text-white/45">No YouTube playlists found.</p>}
               </div>
+
+              {previewPlaylist && <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Import to Wave Player">
+                <div className="w-full max-w-lg rounded-[20px] glass-card border border-white/10 p-5 space-y-4 bg-[#141414]">
+                  <div>
+                    <h3 className="text-base font-bold text-white">Import to Wave Player</h3>
+                    <p className="truncate text-xs text-white/55">{previewPlaylist.title} · {previewPlaylist.itemCount} tracks on YouTube</p>
+                  </div>
+                  {previewBusy && !preview ? <div className="space-y-2">
+                    <p className="text-xs text-white/60">{previewProgress ? `Matching songs… ${previewProgress.loaded}/${previewProgress.total} (${previewProgress.matched} matched)` : 'Loading playlist tracks…'}</p>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-white transition-all" style={{ width: previewProgress && previewProgress.total ? `${Math.round((previewProgress.loaded / previewProgress.total) * 100)}%` : '8%' }} /></div>
+                    <button onClick={closePreview} className="rounded-full border border-white/10 px-4 py-2 text-xs text-white/75">Cancel</button>
+                  </div> : previewError && !preview ? <div className="space-y-3">
+                    <p role="alert" className="text-xs text-red-300">{previewError}</p>
+                    <div className="flex gap-2"><button onClick={closePreview} className="rounded-full border border-white/10 px-4 py-2 text-xs text-white/75">Close</button>{previewError.includes('reconnect') && <button onClick={() => location.assign('/api/auth/youtube/connect')} className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-black">Reconnect YouTube</button>}</div>
+                  </div> : preview ? <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <span className="rounded-full bg-emerald-400/10 px-2.5 py-1 text-emerald-300">✓ Matched: {preview.matched.length}</span>
+                      <span className="rounded-full bg-amber-400/10 px-2.5 py-1 text-amber-300">⚠ Possible: {preview.possible.length}</span>
+                      <span className="rounded-full bg-white/5 px-2.5 py-1 text-white/55">✕ Unmatched: {preview.unmatched.length}</span>
+                    </div>
+                    {preview.unmatched.length > 0 && <div className="max-h-48 overflow-y-auto rounded-xl bg-black/30 p-2">
+                      {[...preview.possible.map(m => ({ ...m, mark: '⚠' })), ...preview.unmatched.map(m => ({ ...m, mark: '✕' }))].slice(0, 30).map(m => <p key={m.youtubeVideoId || m.title} className="truncate px-2 py-1 text-xs text-white/60">{m.mark} {m.title} — {m.channelTitle || 'Unknown'}{m.tier === 'possible' ? ' (possible match)' : ''}</p>)}
+                    </div>}
+                    {previewError && <p role="alert" className="text-xs text-red-300">{previewError}</p>}
+                    <p className="text-[11px] text-white/40">Matched songs import as JioSaavn tracks. Unmatched songs are skipped (they stay playable from the YouTube section).</p>
+                    <div className="flex flex-wrap gap-2">
+                      <button disabled={importing || !preview.matched.length} onClick={() => void confirmImport(false)} className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-black disabled:opacity-50">{importing ? 'Importing…' : `Import matched (${preview.matched.length})`}</button>
+                      {preview.possible.length > 0 && <button disabled={importing} onClick={() => void confirmImport(true)} className="rounded-full border border-white/15 px-4 py-2 text-xs text-white/85 disabled:opacity-50">Include possible ({preview.matched.length + preview.possible.length})</button>}
+                      <button disabled={importing} onClick={closePreview} className="rounded-full border border-white/10 px-4 py-2 text-xs text-white/75">Cancel</button>
+                    </div>
+                  </div> : null}
+                </div>
+              </div>}
 
               {localPlaylists.length > 0 ? (
                 <div>
@@ -176,7 +277,7 @@ export const LibraryPage: React.FC<{ onPlay: (t: Track, list?: Track[]) => void;
                         <div key={pl.id} className="rounded-[20px] glass-card p-4 flex gap-3">
                           <div className="h-20 w-20 rounded-[14px] bg-gradient-to-br from-[#0a0a0c]/30 to-[#ff6b35]/20 border border-white/10 flex items-center justify-center text-white font-bold text-[18px] shrink-0">{pl.title.slice(0, 2).toUpperCase()}</div>
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-[13.5px] font-semibold tracking-[-0.01em] text-white">{pl.title} <span className="rounded-full bg-white/10 border border-white/10 px-1.5 py-0.5 text-[10px] font-bold text-[#a1a1aa]">{pl.id.startsWith('LOCAL_') ? 'LOCAL' : 'YT'}</span></p>
+                            <p className="truncate text-[13.5px] font-semibold tracking-[-0.01em] text-white">{pl.title} <span className="rounded-full bg-white/10 border border-white/10 px-1.5 py-0.5 text-[10px] font-bold text-[#a1a1aa]">{pl.id.startsWith('LOCAL_') ? 'LOCAL' : 'YT'}</span>{pl.sourcePlaylistId ? <span className="ml-1 rounded-full bg-red-400/10 px-1.5 py-0.5 text-[10px] font-bold text-red-300">YouTube import</span> : null}</p>
                             <p className="truncate text-xs text-[#a1a1aa]">{pl.description || 'No description'} • {pl.privacyStatus}</p>
                             <p className="text-xs font-medium text-[#71717a] mt-1">{(pl.songs || []).length} songs • {new Date(pl.createdAt).toLocaleDateString()}</p>
                           </div>

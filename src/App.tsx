@@ -17,6 +17,7 @@ import { ProfilePage } from './pages/Profile';
 import { ExplorePage } from './pages/Explore';
 import { ytmusicSuggestions } from './services/ytmusicApi';
 import { playerStore } from './services/playerStore';
+import { startAutoplay } from './services/autoplay';
 import { settingsStore } from './services/settingsStore';
 import { Track } from './types';
 
@@ -46,6 +47,9 @@ function AppContent() {
   const [glassEnabled, setGlassEnabled] = useState(() => settingsStore.get().glassEnabled);
   const [glassIntensity, setGlassIntensity] = useState(() => settingsStore.get().glassIntensity);
   const sugTimeout = useRef<number | null>(null);
+
+  // Smart autoplay: extend the queue before it runs dry (never touches the engine).
+  useEffect(() => startAutoplay(), []);
 
   // Sync with browser Back/Forward (popstate)
   useEffect(() => {

@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import YTMusic from 'ytmusic-api';
-import { resolveYouTubeAudio, YOUTUBE_VIDEO_ID } from './youtubeStream';
-import { registerYoutubeRoutes } from './googleYouTube';
+import { resolveYouTubeAudio, YOUTUBE_VIDEO_ID } from './youtubeStream.js';
+import { registerYoutubeRoutes } from './googleYouTube.js';
 import { pathToFileURL } from 'node:url';
 
 const app = express();

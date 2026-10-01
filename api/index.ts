@@ -1,13 +1,4 @@
-let appInstance: any = null;
-let appLoadError: string | null = null;
-
-try {
-  const mod = await import('../server/ytmusic.js').catch(async () => import('../server/ytmusic'));
-  appInstance = mod.app || mod.default;
-} catch (err: any) {
-  appLoadError = `Failed to load ../server/ytmusic: ${err?.stack || err?.message || String(err)}`;
-  console.error(appLoadError);
-}
+import { app } from '../server/ytmusic.js';
 
 const SAAVN_TIMEOUT_MS = 12000;
 const SAAVN_UA =
@@ -109,11 +100,6 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  if (appLoadError || !appInstance) {
-    sendJson(res, 500, { error: 'APP_INIT_FAILED', details: appLoadError });
-    return;
-  }
-
   // Delegate all other API routes to Express, waiting for the HTTP response stream to finish.
   return new Promise<void>((resolve) => {
     let finished = false;
@@ -128,7 +114,7 @@ export default async function handler(req: any, res: any) {
     res.once('error', onFinish);
 
     try {
-      appInstance(req, res);
+      app(req, res);
     } catch (e: any) {
       console.error('[api] express dispatch error:', String(e?.message || e).slice(0, 300));
       if (!res.headersSent) {

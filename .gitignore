@@ -145,3 +145,6 @@ vite.config.ts.timestamp-*
 # Wave Player local
 .vercel/
 oauth.json
+jiosaavn-api/
+dist-test/
+

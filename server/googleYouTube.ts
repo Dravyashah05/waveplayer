@@ -106,11 +106,12 @@ async function tokenExchange(code: string, verifier: string) {
   if (!response.ok) throw new Error('OAUTH_EXCHANGE_FAILED');
   return { accessToken: data.access_token as string, refreshToken: data.refresh_token as string | undefined, expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000, scopes: String(data.scope || '').split(' ').filter(Boolean) } satisfies Credentials;
 }
-function startOAuth(session: Session, kind: 'login' | 'youtube', res: Response, manage = false) {
+async function startOAuth(req: Request, session: Session, kind: 'login' | 'youtube', res: Response, manage = false) {
   if (!config(res)) return;
   const state = randomBytes(32).toString('hex'); const verifier = randomBytes(48).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   session.pending = { state, kind, verifier, expiresAt: Date.now() + 10 * 60_000 };
+  await saveSession(req);
   // Incremental authorization: login asks identity scopes only; YouTube asks
   // readonly by default and the broader `youtube` scope only when `manage`
   // (playlist create/edit/delete) is explicitly requested.
@@ -169,26 +170,9 @@ function registerYoutubeRoutes(app: Express) {
     const record = { id, value: session } as RequestSession;
     requestSessions.set(req, record);
     if (!raw || !/^[a-f0-9]{64}$/.test(raw)) res.setHeader('Set-Cookie', `${COOKIE}=${id}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
-    const persist = async () => {
-      if (process.env.NODE_ENV === 'production' && redisConfigured) {
-        if (record.deleted) await redisCommand('DEL', `wave:sessions:${record.id}`);
-        else await redisCommand('SET', `wave:sessions:${record.id}`, JSON.stringify(record.value), 'EX', '2592000');
-      } else if (record.deleted) sessions.delete(record.id);
-      else sessions.set(record.id, record.value);
-    };
-    if (process.env.NODE_ENV === 'production') {
-      const originalEnd = res.end.bind(res);
-      let ending = false;
-      (res as any).end = (...args: any[]) => {
-        if (ending) return res;
-        ending = true;
-        void persist().catch(() => {}).finally(() => originalEnd(...args));
-        return res;
-      };
-    } else res.on('finish', () => { void persist(); });
     next();
   });
-  app.get('/api/auth/google', (req, res) => startOAuth(sessionFor(req, res), 'login', res));
+  app.get('/api/auth/google', async (req, res) => startOAuth(req, sessionFor(req, res), 'login', res));
   // Single shared callback: Google only redirects to GOOGLE_REDIRECT_URI
   // (/api/auth/google/callback). /api/auth/youtube/callback is an alias for
   // the same handler so the endpoint checklist passes without requiring a
@@ -231,7 +215,7 @@ function registerYoutubeRoutes(app: Express) {
     res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`); res.json({ ok: true });
   });
   app.get('/api/auth/youtube/status', (req, res) => { const s = sessionFor(req, res); res.json({ connected: !!s.youtube, scopes: s.youtube?.scopes || [] }); });
-  app.get('/api/auth/youtube/connect', (req, res) => { const s = sessionFor(req, res); if (!s.user) return res.status(401).json({ error: 'GOOGLE_NOT_CONNECTED' }); startOAuth(s, 'youtube', res, wantsManage(req)); });
+  app.get('/api/auth/youtube/connect', async (req, res) => { const s = sessionFor(req, res); if (!s.user) return res.status(401).json({ error: 'GOOGLE_NOT_CONNECTED' }); await startOAuth(req, s, 'youtube', res, wantsManage(req)); });
   app.post('/api/auth/youtube/disconnect', async (req, res) => { const s = sessionFor(req, res); clearUserCache(s.user?.id); s.youtube = undefined; await saveSession(req); res.json({ ok: true }); });
 
   app.get('/api/youtube/account', async (req, res) => { try { const s = sessionFor(req, res); const data = await ytApi(s, 'channels?part=snippet%2CcontentDetails&mine=true'); const c = data.items?.[0]; if (!c) return res.status(404).json({ error: 'PLAYLIST_NOT_FOUND' }); res.json({ id: c.id, channelId: c.id, title: c.snippet?.title || '', description: c.snippet?.description || '', thumbnail: c.snippet?.thumbnails?.default?.url || '' }); } catch (e) { fail(res, e); } });

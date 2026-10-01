@@ -1,0 +1,58 @@
+{
+  "name": "wave-player",
+  "version": "1.0.0",
+  "private": true,
+  "description": "",
+  "homepage": "https://github.com/Dravyashah05/waveplayer#readme",
+  "bugs": {
+    "url": "https://github.com/Dravyashah05/waveplayer/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dravyashah05/waveplayer.git"
+  },
+  "license": "ISC",
+  "author": "dravya shah",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite --port=3001 --host=0.0.0.0",
+    "dev:server": "tsx server/ytmusic.ts",
+    "dev:all": "concurrently \"tsx server/ytmusic.ts\" \"vite --port=3001 --host=0.0.0.0\"",
+    "dev:all:win": "pwsh -Command \"Start-Process pwsh -ArgumentList '-NoProfile','-Command','npx tsx server/ytmusic.ts' ; vite --port=3001 --host=0.0.0.0\"",
+    "build": "vite build",
+    "preview": "vite preview --port=3001",
+    "lint": "tsc --noEmit",
+    "test:recommendations": "tsx --test src/services/recommendation/recommendation.test.ts",
+    "test:stream": "tsx --test src/services/streamPlayback.test.ts server/youtubeStream.test.ts"
+  },
+  "dependencies": {
+    "@types/crypto-js": "^4.2.2",
+    "cors": "^2.8.6",
+    "crypto-js": "^4.2.0",
+    "dotenv": "^18.0.1",
+    "express": "^5.2.1",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "ytmusic-api": "^5.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^10.0.5",
+    "tailwindcss": "^4.1.14",
+    "tsx": "^4.23.13",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}

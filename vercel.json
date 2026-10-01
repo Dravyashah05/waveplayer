@@ -1,0 +1,11 @@
+{
+  "functions": {
+    "api/[...].ts": {
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/[...]" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

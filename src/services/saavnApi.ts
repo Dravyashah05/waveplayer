@@ -207,18 +207,10 @@ async function callSaavnApi(endpoint: string, params: Record<string, string | nu
     if (!res.ok) throw new Error(`Saavn API failed: ${res.status}`);
     return await res.json();
   } catch (err) {
-    // Fallback: If Vite proxy fails, try direct call via public CORS mirror or return null
-    try {
-      const directUrl = new URL('https://www.jiosaavn.com/api.php');
-      directUrl.searchParams.append('__call', endpoint);
-      directUrl.searchParams.append('_format', 'json');
-      directUrl.searchParams.append('_marker', '0');
-      directUrl.searchParams.append('api_version', '4');
-      directUrl.searchParams.append('ctx', 'web6dot0');
-      Object.entries(params).forEach(([key, val]) => directUrl.searchParams.append(key, String(val)));
-      const directRes = await fetch(directUrl.toString());
-      if (directRes.ok) return await directRes.json();
-    } catch {}
+    // NOTE: no direct https://www.jiosaavn.com fallback here — JioSaavn sends
+    // no CORS headers, so browser-direct calls always fail with ERR_FAILED and
+    // just spam the console. Rely on the same-origin proxy; callers already
+    // degrade gracefully (empty lists) on throw.
     throw err;
   }
 }

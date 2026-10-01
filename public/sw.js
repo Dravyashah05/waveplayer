@@ -13,23 +13,48 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+function safePut(request, response) {
+  // Cache Storage rejects non-GET requests and opaque/error responses — never
+  // let that rejection turn into "Failed to convert value to 'Response'".
+  try {
+    if (request.method !== 'GET') return;
+    if (!response || !response.ok) return;
+    if (response.type !== 'basic') return;
+    const clone = response.clone();
+    caches.open(CACHE).then((c) => c.put(request, clone).catch(() => {})).catch(() => {});
+  } catch {}
+}
+
+function offlineApiFallback() {
+  return new Response(JSON.stringify({ error: 'OFFLINE' }), {
+    status: 503,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   // Network-first for API, cache-first for assets
   if (url.pathname.startsWith('/api/')) {
     // Account and YouTube API responses are private and session-dependent.
     if (url.pathname.startsWith('/api/auth/') || url.pathname.startsWith('/api/youtube/')) {
-      e.respondWith(fetch(e.request));
+      e.respondWith(fetch(e.request).catch(offlineApiFallback));
+      return;
+    }
+    // Only cache GET; never cache POST/PUT/DELETE (Cache.put rejects them).
+    if (e.request.method !== 'GET') {
+      e.respondWith(fetch(e.request).catch(offlineApiFallback));
       return;
     }
     e.respondWith(
       fetch(e.request)
         .then((r) => {
-          const clone = r.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, clone));
+          safePut(e.request, r);
           return r;
         })
-        .catch(() => caches.match(e.request))
+        .catch(() =>
+          caches.match(e.request).then((cached) => cached || offlineApiFallback())
+        )
     );
     return;
   }
@@ -37,13 +62,10 @@ self.addEventListener('fetch', (e) => {
     caches.match(e.request).then((cached) => {
       const fetchPromise = fetch(e.request)
         .then((network) => {
-          if (network.ok && e.request.method === 'GET') {
-            const clone = network.clone();
-            caches.open(CACHE).then((c) => c.put(e.request, clone));
-          }
+          safePut(e.request, network);
           return network;
         })
-        .catch(() => cached);
+        .catch(() => cached || Response.error());
       return cached || fetchPromise;
     })
   );

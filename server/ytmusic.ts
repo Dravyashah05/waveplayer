@@ -95,7 +95,7 @@ async function fetchLrclibSynced(artist: string, track: string, album: string, d
     for (const url of urls) {
       try {
         const controller = new AbortController();
-        const t = setTimeout(() => controller.abort(), 7000);
+        const t = setTimeout(() => controller.abort(), 4000);
         const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'WavePlayer/1.0' } });
         clearTimeout(t);
         if (!res.ok) continue;
@@ -153,6 +153,16 @@ async function fetchLrclibSynced(artist: string, track: string, album: string, d
 function shortError(e: any): string {
   if (e?.code === 'ENOTFOUND') return `DNS ENOTFOUND ${e.hostname || ''}`.trim();
   return String(e?.message || e).slice(0, 300);
+}
+
+// Vercel serverless kills the function at maxDuration (30s) with a 500, so
+// every upstream call in the lyrics flow must be time-boxed well under that.
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer!));
 }
 
 // Health
@@ -251,12 +261,17 @@ app.get('/api/ytmusic/lyrics/:id', async (req,res)=>{
     let duration = 0;
 
     // Try YTMusic for metadata + plain lyrics, but don't fail whole request if offline (ENOTFOUND)
+    // Time-boxed: YTMusic init + getSong can hang for 20s+ from datacenter IPs.
     try {
-      const yt = await getYTMusic();
-      const [s, l] = await Promise.all([
-        yt.getSong(id).catch(() => null),
-        yt.getLyrics(id).catch(() => null),
-      ]);
+      const ytmWork = (async () => {
+        const yt = await getYTMusic();
+        const [s, l] = await Promise.all([
+          yt.getSong(id).catch(() => null),
+          yt.getLyrics(id).catch(() => null),
+        ]);
+        return { s, l } as const;
+      })();
+      const { s, l } = await withTimeout(ytmWork, 9000, { s: null, l: null });
       song = s;
       ytmLyrics = l;
       artist = String(song?.artist?.name || (song as any)?.author || '').trim();
@@ -270,7 +285,7 @@ app.get('/api/ytmusic/lyrics/:id', async (req,res)=>{
     // Try lrclib with whatever metadata we have
     let lrclib: { synced: Array<{ time: number; text: string }> | null; plain: string[] | null; source: string | null } = { synced: null, plain: null, source: null };
     if (artist || track) {
-      lrclib = await fetchLrclibSynced(artist, track, album, duration);
+      lrclib = await withTimeout(fetchLrclibSynced(artist, track, album, duration), 14000, lrclib);
       if (lrclib.synced?.length) {
         return res.json({ synced: lrclib.synced, plain: lrclib.plain || ytmLyrics || null, lyrics: ytmLyrics || lrclib.plain || null, source: lrclib.source, artist, track, duration });
       }
@@ -283,7 +298,7 @@ app.get('/api/ytmusic/lyrics/:id', async (req,res)=>{
     // Fallback: oEmbed for title/author when YTMusic gave nothing
     try {
       const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 6000);
+      const t = setTimeout(() => controller.abort(), 4000);
       const r = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`, { signal: controller.signal, headers: { 'User-Agent': 'WavePlayer/1.0' } });
       clearTimeout(t);
       if (r.ok) {
@@ -291,7 +306,7 @@ app.get('/api/ytmusic/lyrics/:id', async (req,res)=>{
         const fallbackTitle = String(j.title || '').trim();
         const fallbackArtist = String(j.author_name || '').trim();
         if (fallbackTitle) {
-          const fallback = await fetchLrclibSynced(fallbackArtist, fallbackTitle, '', 0);
+          const fallback = await withTimeout(fetchLrclibSynced(fallbackArtist, fallbackTitle, '', 0), 12000, { synced: null, plain: null, source: null });
           if (fallback.synced?.length) return res.json({ synced: fallback.synced, plain: fallback.plain, lyrics: fallback.plain, source: fallback.source, artist: fallbackArtist || artist, track: fallbackTitle || track, duration: 0 });
           if (fallback.plain?.length) return res.json({ synced: null, plain: fallback.plain, lyrics: fallback.plain, source: fallback.source, artist: fallbackArtist || artist, track: fallbackTitle || track, duration: 0 });
           // still return title so frontend can show something rather than empty
@@ -380,28 +395,48 @@ app.get('/api/ytmusic/artist/:id/albums', async (req,res)=>{
   catch(e:any){ console.error('[YTMusic] artist albums error:', shortError(e)); res.status(500).json({ error: shortError(e) }); }
 });
 
-// JioSaavn proxy endpoint
+// JioSaavn proxy endpoint — hardened for Vercel serverless (datacenter IPs get
+// throttled/blocked by JioSaavn, so: short timeout, browser-like headers,
+// forward upstream status as 502 instead of 500 so the frontend falls back
+// gracefully instead of treating it as a crash).
 app.all('/api/saavn', async (req, res) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
   try {
     const url = new URL('https://www.jiosaavn.com/api.php');
     Object.entries(req.query).forEach(([k, v]) => {
-      url.searchParams.append(k, String(v));
+      if (k === 'path') return;
+      url.searchParams.append(k, Array.isArray(v) ? String(v[0]) : String(v));
     });
     const saavnRes = await fetch(url.toString(), {
+      signal: controller.signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.jiosaavn.com/',
+        'Origin': 'https://www.jiosaavn.com',
       },
     });
-    const data = await saavnRes.text();
-    try {
-      res.setHeader('Content-Type', 'application/json');
-      res.send(data);
-    } catch {
-      res.send(data);
+    clearTimeout(timer);
+    if (!saavnRes.ok) {
+      return res.status(502).json({ error: `SAAVN_UPSTREAM_${saavnRes.status}` });
     }
+    const data = await saavnRes.text();
+    // JioSaavn sometimes returns HTML (block page) — don't forward as JSON.
+    const trimmed = data.trimStart();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+      return res.status(502).json({ error: 'SAAVN_UPSTREAM_INVALID' });
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.send(data);
   } catch (e: any) {
-    console.error('[JioSaavn Proxy Error]:', e);
-    res.status(500).json({ error: String(e?.message || e) });
+    clearTimeout(timer);
+    if (e?.name === 'AbortError') {
+      return res.status(502).json({ error: 'SAAVN_UPSTREAM_TIMEOUT' });
+    }
+    console.error('[JioSaavn Proxy Error]:', shortError(e));
+    res.status(502).json({ error: 'SAAVN_UPSTREAM_UNAVAILABLE' });
   }
 });
 

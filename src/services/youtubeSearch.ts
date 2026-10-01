@@ -3,8 +3,6 @@ import { Track } from '../types';
 const INV_INSTANCES = [
   'https://inv.tux.pizza',
   'https://yewtu.be',
-  'https://invidious.snopyta.org',
-  'https://inv.nadeko.net',
   'https://vid.puffyan.us',
 ];
 

@@ -309,7 +309,8 @@ export async function searchLrcLib(
 ): Promise<{ synced: SyncedLine[] | null; plain: string[] | null; source: string | null } | null> {
   if (!trackTitle) return null;
   const cleanTitle = trackTitle.replace(/\(.*?\)|\[.*?\]/g, '').trim();
-  const firstArtist = (artistName || '').split(/[,&/|]/)[0]?.trim() || '';
+  // Auto-generated "Artist - Topic" channel names never match lyric credits.
+  const firstArtist = (artistName || '').split(/[,&/|]/)[0]?.replace(/\s+-\s+Topic\s*$/i, '').trim() || '';
 
   // 1. Exact lookup
   try {
@@ -418,11 +419,22 @@ export async function getLyrics(videoId: string): Promise<LyricsData | null> {
 const YT_WRITE_BASE = '/api/ytmusic'; // proxied to Python :3000 for /playlist & /auth, Node :8001 for others
 
 export async function checkYTMusicAuth(): Promise<{ authenticated: boolean; authFile: string | null; mode: string }> {
+  // Legacy `/api/ytmusic/auth/*` never existed server-side (was a 404).
+  // Query the real gateway status with a bound; anything else is anonymous.
   try {
-    const res = await fetch(`${YT_WRITE_BASE}/auth/status`);
-    if (!res.ok) return { authenticated: false, authFile: null, mode: 'mock' };
-    return await res.json();
-  } catch { return { authenticated: false, authFile: null, mode: 'mock' }; }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    let res: Response;
+    try {
+      res = await fetch('/api/ytmusic-py/auth/status', { credentials: 'include', signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return { authenticated: false, authFile: null, mode: 'anonymous' };
+    const data: any = await res.json().catch(() => ({}));
+    const authenticated = !!data?.authenticated;
+    return { authenticated, authFile: null, mode: authenticated ? 'ytmusic' : 'anonymous' };
+  } catch { return { authenticated: false, authFile: null, mode: 'anonymous' }; }
 }
 
 export async function createYTMusicPlaylist(title: string, description = '', privacyStatus: 'PRIVATE' | 'PUBLIC' | 'UNLISTED' = 'PRIVATE'): Promise<{ playlistId: string; mock?: boolean }> {

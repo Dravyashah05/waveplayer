@@ -13,9 +13,9 @@ export const TrackCard: React.FC<Props> = ({ track, isActive, onPlay, onAdd }) =
     <div className={`group relative flex gap-3 rounded-[20px] border glass p-3 transition-all duration-300 ${isActive ? 'border-white/20 bg-white/[0.06] shadow-[0_8px_30px_rgba(255,255,255,0.08),inset_0_1px_0_rgba(255,255,255,0.08)]' : 'border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/[0.10] hover:shadow-[0_10px_30px_rgba(0,0,0,0.3)] hover:-translate-y-[1px]'}`}>
       {isActive && <span className="pointer-events-none absolute inset-0 rounded-[20px] bg-gradient-to-br from-white/[0.07] to-transparent" />}
       <div className="relative h-[64px] w-[88px] min-[400px]:h-[68px] min-[400px]:w-[100px] shrink-0 overflow-hidden rounded-xl bg-neutral-900 ring-1 ring-white/10">
-        <img src={track.thumbnail} alt={track.title} loading="lazy" className="h-full w-full object-cover group-hover:scale-[1.04] transition-transform duration-500" referrerPolicy="no-referrer" />
+        <img src={track.thumbnail} alt={track.title} loading="lazy" decoding="async" draggable={false} className="h-full w-full object-cover group-hover:scale-[1.04] transition-transform duration-500" referrerPolicy="no-referrer" />
         <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-        <button onClick={onPlay} className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 group-hover:opacity-100 transition-all backdrop-blur-[2px]">
+        <button onClick={onPlay} aria-label={`Play ${track.title}`} className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100 sm:focus-within:opacity-100 transition-all backdrop-blur-[2px]">
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-neutral-900 shadow-lg scale-90 group-hover:scale-100 transition-transform">
             <Play className="h-4 w-4 ml-0.5 fill-current" />
           </span>

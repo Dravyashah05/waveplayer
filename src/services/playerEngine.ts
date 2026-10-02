@@ -1,14 +1,12 @@
 import { useSyncExternalStore } from 'react';
 import { Track } from '../types';
 import { playerStore } from './playerStore';
-import { getSaavnSongDetails } from './saavnApi';
-import { searchYouTube } from './youtubeSearch';
 import { logEvent } from './listeningStore';
-import { resolveYouTubeAudio } from './ytmusicApi';
-import { TemporaryStreamCache, canRetryDirectStream, runDeduped } from './temporaryStreamCache';
-import { resolutionRoute } from './playbackSource';
+import { canRetryDirectStream } from './temporaryStreamCache';
 import { settingsStore } from './settingsStore';
 import { emitPlayerEvent } from './playerEvents';
+import { normalizeAudioMetadata, normalizeNetworkType } from './audioSources';
+import { audioSourceManager, type ResolvedAudio as ManagerResolvedAudio } from './audioSourceManager';
 
 /**
  * The one and only playback engine.
@@ -26,13 +24,24 @@ import { emitPlayerEvent } from './playerEvents';
  */
 
 export interface ResolvedStream {
-  source?: 'saavn' | 'youtube-audio' | 'youtube-iframe';
+  source?: 'saavn' | 'youtube-audio' | 'youtube-iframe' | 'local' | 'custom';
+  codec?: string;
   streamUrl?: string;
   downloadUrl?: string;
   ytId?: string;
   expiresAt?: number;
   mimeType?: string;
+  bitrate?: number;
   bitrateKbps?: number;
+  sampleRate?: number;
+  bitDepth?: number;
+  channels?: number | string;
+  container?: string;
+  duration?: number;
+  isLossless?: boolean;
+  streamType?: string;
+  networkType?: string;
+  bufferedSeconds?: number;
   contentLength?: number;
 }
 
@@ -211,6 +220,7 @@ class PlayerEngine {
       // Same track (reorder, remove-elsewhere, or re-attach) — keep playing,
       // just make sure the backend surface still exists.
       this.ensureSurface();
+      this.preloadNext();
       return;
     }
     this.loggedMilestones.clear();
@@ -229,68 +239,56 @@ class PlayerEngine {
     }
   }
 
-  // ——— Stream resolution (cached, deduped) ———
-  private resolveCache = new TemporaryStreamCache();
-  private inflight = new Map<string, Promise<ResolvedStream>>();
+  // ——— Stream resolution ———
+  // Owned entirely by AudioSourceManager (chain, fallback, cache, dedup).
+  // The engine only maps the normalized result onto its backend-facing
+  // ResolvedStream. Stale protection stays here via loadGen (Task 01).
   private directRetries = new Map<string, number>();
   private audioRecoveries = new Map<string, Promise<void>>();
 
-  private resolveStream(track: Track, forceRefresh = false): Promise<ResolvedStream> {
-    if (resolutionRoute(track) === 'provided-audio') return Promise.resolve({ source: 'saavn', streamUrl: https(track.streamUrl!), downloadUrl: track.downloadUrl ? https(track.downloadUrl) : undefined });
-    if (forceRefresh) this.resolveCache.delete(track.id);
-    const cached = this.resolveCache.get(track.id);
-    if (cached) {
-      return Promise.resolve(cached);
-    }
-    const run = this.inflight.get(track.id);
-    if (run) return run;
-    return runDeduped(this.inflight, track.id, async (): Promise<ResolvedStream> => {
-      const saavnish = resolutionRoute(track) === 'saavn';
-      if (saavnish) {
-        try {
-          const d = await getSaavnSongDetails(track.id);
-          if (d?.streamUrl) {
-            const r: ResolvedStream = { source: 'saavn', streamUrl: https(d.streamUrl), downloadUrl: d.downloadUrl ? https(d.downloadUrl) : undefined };
-            this.resolveCache.set(track.id, r);
-            return r;
-          }
-        } catch {}
-        // Fallback: find a playable YouTube match
-        try {
-          const hits = await searchYouTube(`${track.title} ${track.author}`);
-          const m = hits.find((h) => YT_ID_RE.test(h.id));
-          if (m) {
-            const audio = await resolveYouTubeAudio(m.id);
-            const r: ResolvedStream = audio
-              ? { source: 'youtube-audio', ytId: m.id, streamUrl: audio.streamUrl, expiresAt: audio.expiresAt, mimeType: audio.mimeType, bitrateKbps: audio.bitrate ? Math.round(audio.bitrate / 1000) : undefined }
-              : { source: 'youtube-iframe', ytId: m.id };
-            this.resolveCache.set(track.id, r);
-            return r;
-          }
-        } catch {}
-        return {};
-      }
-      // Use only a directly exposed audio URL. The IFrame remains the fallback.
-      if (import.meta.env.DEV) console.debug('[Wave Stream] Resolving YouTube audio:', track.id);
-      const audio = await resolveYouTubeAudio(track.id);
-      const r: ResolvedStream = audio
-        ? { source: 'youtube-audio', ytId: track.id, streamUrl: audio.streamUrl, expiresAt: audio.expiresAt, mimeType: audio.mimeType, bitrateKbps: audio.bitrate ? Math.round(audio.bitrate / 1000) : undefined }
-        : { source: 'youtube-iframe', ytId: track.id };
-      this.resolveCache.set(track.id, r);
-      if (audio && import.meta.env.DEV) console.debug('[Wave Stream] Resolved audio stream');
-      return r;
-    });
+  private async resolveStream(track: Track, forceRefresh = false): Promise<ResolvedStream> {
+    const { resolved } = await audioSourceManager.resolve(track, { forceRefresh });
+    if (!resolved) return {};
+    return this.toStream(track, resolved);
   }
 
-  /** Warm the resolve cache for the upcoming track so "next" is instant. */
+  /** Single mapping point: manager result → backend-facing stream. */
+  private toStream(track: Track, resolved: ManagerResolvedAudio): ResolvedStream {
+    const source = resolved.sourceId === 'saavn' ? 'saavn'
+      : resolved.sourceId === 'youtube' ? 'youtube-audio'
+        : resolved.sourceId === 'youtube-player' || resolved.type === 'iframe' ? 'youtube-iframe'
+          : resolved.sourceId === 'local' || resolved.sourceId === 'offline' ? 'local'
+            : 'custom';
+    return {
+      source,
+      streamUrl: resolved.url ? https(resolved.url) : undefined,
+      ytId: resolved.ytId,
+      expiresAt: resolved.expiresAt,
+      mimeType: resolved.mimeType,
+      codec: resolved.codec,
+      bitrate: resolved.bitrate,
+      bitrateKbps: resolved.bitrateKbps,
+      sampleRate: resolved.sampleRate,
+      bitDepth: resolved.bitDepth,
+      channels: resolved.channels,
+      container: resolved.container,
+      duration: resolved.duration,
+      isLossless: resolved.isLossless,
+      streamType: resolved.streamType,
+      networkType: resolved.networkType,
+      bufferedSeconds: resolved.bufferedSeconds,
+      downloadUrl: resolved.downloadUrl ? https(resolved.downloadUrl) : undefined,
+    };
+  }
+
+  /** Warm the manager cache for the upcoming track so "next" is instant. */
   private preloadNext() {
     try {
-      const q = playerStore.queue();
-      const idx = playerStore.currentIndex();
-      const nxt = q[idx + 1];
-      if (nxt && nxt.id !== this.preloadedNextId && !nxt.streamUrl && !this.resolveCache.has(nxt.id)) {
+      if (!settingsStore.get().gapless) return;
+      const nxt = playerStore.peekNext();
+      if (nxt && nxt.id !== this.preloadedNextId && !nxt.streamUrl && !audioSourceManager.hasCached(nxt.id)) {
         this.preloadedNextId = nxt.id;
-        this.resolveStream(nxt).catch(() => {});
+        audioSourceManager.resolve(nxt).catch(() => {});
       }
     } catch {}
   }
@@ -350,7 +348,7 @@ class PlayerEngine {
         this.maybeCrossfade(a);
       });
       a.addEventListener('loadedmetadata', () => {
-        this.set({ duration: Number.isFinite(a.duration) ? a.duration : this.snapshot.duration });
+        if (Number.isFinite(a.duration)) this.setActualDuration(a.duration);
         if (this.pendingSeek != null) {
           try { a.currentTime = this.pendingSeek; } catch {}
           this.set({ progress: this.pendingSeek });
@@ -438,30 +436,23 @@ class PlayerEngine {
       if (previous?.source === 'youtube-audio' && videoId && canRetryDirectStream(this.directRetries.get(track.id) || 0)) {
         this.directRetries.set(track.id, 1);
         if (import.meta.env.DEV) console.debug('[Wave Stream] Direct stream failed — retrying');
-        const refreshed = await resolveYouTubeAudio(videoId);
+        const refreshed = await audioSourceManager.refreshYoutubeDirect(track, videoId);
         if (gen !== this.loadGen || this.currentTrack?.id !== track.id) return;
-        if (refreshed) {
-          const result: ResolvedStream = { source: 'youtube-audio', ytId: videoId, streamUrl: refreshed.streamUrl, expiresAt: refreshed.expiresAt, mimeType: refreshed.mimeType, bitrateKbps: refreshed.bitrate ? Math.round(refreshed.bitrate / 1000) : undefined };
-          this.resolveCache.set(track.id, result);
+        if (refreshed?.url) {
           if (import.meta.env.DEV) console.debug('[Wave Stream] Retrying refreshed audio stream');
-          this.startAudio(track, result, autoplay);
+          this.startAudio(track, this.toStream(track, refreshed), autoplay);
           return;
         }
       }
 
       if (!videoId && track.source === 'saavn') {
-        try {
-          const match = (await searchYouTube(`${track.title} ${track.author}`)).find((candidate) => YT_ID_RE.test(candidate.id));
-          if (match) videoId = match.id;
-        } catch {}
+        videoId = (await audioSourceManager.findYoutubeMatch(track)) ?? undefined;
         if (gen !== this.loadGen || this.currentTrack?.id !== track.id) return;
         if (videoId) {
-          const audio = await resolveYouTubeAudio(videoId);
+          const audio = await audioSourceManager.refreshYoutubeDirect(track, videoId);
           if (gen !== this.loadGen || this.currentTrack?.id !== track.id) return;
-          if (audio) {
-            const result: ResolvedStream = { source: 'youtube-audio', ytId: videoId, streamUrl: audio.streamUrl, expiresAt: audio.expiresAt, mimeType: audio.mimeType, bitrateKbps: audio.bitrate ? Math.round(audio.bitrate / 1000) : undefined };
-            this.resolveCache.set(track.id, result);
-            this.startAudio(track, result, autoplay);
+          if (audio?.url) {
+            this.startAudio(track, this.toStream(track, audio), autoplay);
             return;
           }
         }
@@ -470,7 +461,7 @@ class PlayerEngine {
       videoId ||= YT_ID_RE.test(track.id) ? track.id : undefined;
       if (videoId) {
         if (import.meta.env.DEV) console.debug('[Wave Stream] Falling back to YouTube IFrame');
-        this.resolveCache.set(track.id, { source: 'youtube-iframe', ytId: videoId });
+        audioSourceManager.cacheIframeFallback(track.id, videoId);
         this.set({ resolved: { source: 'youtube-iframe', ytId: videoId }, backend: null, isBuffering: true, isPlaying: false });
         await this.startYT(track, videoId, autoplay, gen);
       } else {
@@ -523,7 +514,7 @@ class PlayerEngine {
             if (this.currentTrack?.id !== track.id) return;
             try {
               const d = e.target.getDuration?.();
-              if (d) this.set({ duration: d });
+              if (d) this.setActualDuration(d);
               e.target.setVolume?.(this.snapshot.muted ? 0 : this.snapshot.volume);
               if (this.pendingSeek != null) {
                 try { e.target.seekTo?.(this.pendingSeek, true); } catch {}
@@ -541,7 +532,7 @@ class PlayerEngine {
             if (s === YT.PlayerState.PLAYING) {
               try {
                 const d = e.target.getDuration?.();
-                if (d) this.set({ duration: d });
+                if (d) this.setActualDuration(d);
               } catch {}
               this.failedIds.delete(track.id);
               this.set({ isPlaying: true, isBuffering: false, error: null });
@@ -576,7 +567,7 @@ class PlayerEngine {
       }
       if (typeof p.getDuration === 'function') {
         const d = p.getDuration();
-        if (d && d !== this.snapshot.duration) this.set({ duration: d });
+        if (d && d !== this.snapshot.duration) this.setActualDuration(d);
       }
     } catch {}
   }
@@ -876,6 +867,12 @@ class PlayerEngine {
     } catch {}
   }
 
+  private setActualDuration(duration: number) {
+    if (!(Number.isFinite(duration) && duration > 0)) return;
+    const resolved = this.snapshot.resolved;
+    this.set({ duration, resolved: resolved ? { ...resolved, duration } : resolved });
+  }
+
   // ——— Crossfade / Automix Beta ———
   /** Effective overlap seconds. Automix reuses the same path with its own
    *  length; there is no true beat matching (no BPM analysis available), so
@@ -892,8 +889,7 @@ class PlayerEngine {
     if (seconds <= 0 || !Number.isFinite(a.duration) || a.duration <= seconds + 1) return;
     const remaining = a.duration - a.currentTime;
     if (remaining > seconds || remaining < 0.5) return;
-    const q = playerStore.queue();
-    const next = q[playerStore.currentIndex() + 1];
+    const next = playerStore.peekNext();
     if (!next || next.id === this.currentTrack?.id) return;
     if (playerStore.repeat === 'one') return;
     void this.beginCrossfade(next, seconds);
@@ -917,16 +913,21 @@ class PlayerEngine {
   private async beginCrossfade(next: Track, seconds: number) {
     if (this.xfActive || !this.audio) return;
     const main = this.audio;
+    const gen = this.loadGen;
     let resolved: ResolvedStream;
     try {
       resolved = await this.resolveStream(next);
     } catch {
       return;
     }
+    // Stale guard: a track change / retry / teardown during resolution
+    // invalidates this transition. peekNext alone is insufficient (user can
+    // navigate away and back to the same next item within the window).
+    if (gen !== this.loadGen) return;
+    if (this.currentTrack?.id === next.id) return;
     if (!resolved.streamUrl || !this.wantPlay || this.snapshot.backend !== 'audio') return;
     // Queue must not have shifted under us.
-    const q = playerStore.queue();
-    if (q[playerStore.currentIndex() + 1]?.id !== next.id) return;
+    if (playerStore.peekNext()?.id !== next.id) return;
     const target = this.snapshot.muted ? 0 : this.snapshot.volume / 100;
     const tmp = document.createElement('audio');
     tmp.preload = 'auto';
@@ -955,6 +956,12 @@ class PlayerEngine {
         if (this.xfTimer != null) {
           try { window.clearInterval(this.xfTimer); } catch {}
           this.xfTimer = null;
+        }
+        // Handover guard: the queue may have moved under the fade
+        // (user skipped / cleared / new session). Never advance a stale fade.
+        if (gen !== this.loadGen || !this.wantPlay || playerStore.peekNext()?.id !== next.id) {
+          this.teardownXf();
+          return;
         }
         // Hand over: advance the store, then align the fresh element.
         const at = Math.min(Math.max(0, tmp.currentTime), seconds + 0.5);
@@ -1113,46 +1120,65 @@ class PlayerEngine {
   }
 
   /** Current-stream facts for Stats for Nerds. Unknown stays "Unknown". */
-  getStats(): {
-    source: string; codec: string; bitrate: string; sampleRate: string;
-    bitDepth: string; channels: string; container: string; host: string;
-    duration: number; progress: number; backend: string; expiresAt?: number;
-  } {
+  getStats() {
     const r = this.snapshot.resolved;
     const host = (() => {
       try { return r?.streamUrl ? new URL(r.streamUrl).hostname : 'Unknown'; } catch { return 'Unknown'; }
     })();
-    const mime = (r?.mimeType || '').toLowerCase();
-    const codec = mime.includes('mp4') || mime.includes('mp4a') || mime.includes('aac') ? 'AAC'
-      : mime.includes('webm') || mime.includes('opus') ? 'Opus'
-      : mime.includes('mpeg') || mime.includes('mp3') ? 'MP3'
-      : mime.includes('flac') ? 'FLAC'
-      : r?.source === 'saavn' ? 'AAC' : 'Unknown';
-    let bitrate = 'Unknown';
-    if (typeof r?.bitrateKbps === 'number' && r.bitrateKbps > 0) bitrate = `${r.bitrateKbps} kbps`;
-    else if (r?.source === 'saavn' && r.streamUrl) {
-      bitrate = r.streamUrl.includes('_320') ? '320 kbps' : r.streamUrl.includes('_160') ? '160 kbps' : 'Unknown';
-    }
-    let bufferedSec = 0;
-    try {
-      const buf = this.audio?.buffered;
-      if (buf && buf.length) bufferedSec = Math.max(0, buf.end(buf.length - 1) - this.snapshot.progress);
-    } catch {}
-    void bufferedSec;
+    const normalized = r ? normalizeAudioMetadata({
+      url: r.streamUrl || '',
+      source: r.source === 'youtube-audio' || r.source === 'youtube-iframe' ? 'youtube' : r.source || 'custom',
+      sourceId: r.source === 'custom' ? 'Configured source' : r.source || 'Unknown',
+      codec: r.codec,
+      mimeType: r.mimeType,
+      bitrate: r.bitrate,
+      bitrateKbps: r.bitrateKbps,
+      sampleRate: r.sampleRate,
+      bitDepth: r.bitDepth,
+      channels: r.channels,
+      container: r.container,
+      duration: r.duration,
+      isLossless: r.isLossless,
+      streamType: r.streamType,
+      networkType: r.networkType,
+    }, r?.duration) : {};
+    const connection = (navigator as any)?.connection;
+    const networkType = normalizeNetworkType(connection);
+    const bufferedSeconds = this.getBufferedAhead();
+    const source = r?.source === 'youtube-audio' ? 'YouTube' : r?.source === 'youtube-iframe' ? 'YouTube (iframe)' : normalized.source || 'Unknown';
     return {
-      source: r?.source === 'saavn' ? 'JioSaavn' : r?.source === 'youtube-audio' ? 'YouTube' : r?.source === 'youtube-iframe' ? 'YouTube (iframe)' : 'Unknown',
-      codec,
-      bitrate,
-      sampleRate: 'Unknown',
-      bitDepth: 'Unknown',
-      channels: 'Unknown',
-      container: host.includes('googlevideo') ? 'progressive stream' : host === 'Unknown' ? 'Unknown' : 'HTTP stream',
+      source,
+      codec: normalized.codec || 'Unknown',
+      bitrate: typeof normalized.bitrate === 'number' && normalized.bitrate > 0 ? `${normalized.bitrate} kbps` : 'Unknown',
+      sampleRate: typeof normalized.sampleRate === 'number' && normalized.sampleRate > 0 ? `${(normalized.sampleRate / 1000).toFixed(normalized.sampleRate % 1000 ? 1 : 0)} kHz` : 'Unknown',
+      bitDepth: typeof normalized.bitDepth === 'number' && normalized.bitDepth > 0 ? `${normalized.bitDepth}-bit` : 'Unknown',
+      channels: typeof normalized.channels === 'number' ? (normalized.channels === 2 ? 'Stereo' : `${normalized.channels} channels`) : normalized.channels || 'Unknown',
+      container: normalized.container || 'Unknown',
+      duration: typeof normalized.duration === 'number' && normalized.duration > 0 ? normalized.duration : 0,
+      isLossless: typeof normalized.isLossless === 'boolean' ? normalized.isLossless : null,
+      streamType: normalized.streamType || 'Unknown',
+      networkType: networkType || normalized.networkType || 'Unknown',
+      bufferedSeconds,
       host,
-      duration: this.snapshot.duration,
       progress: this.snapshot.progress,
       backend: this.snapshot.backend || 'none',
+      playbackState: this.snapshot.isBuffering ? 'Buffering' : this.snapshot.isPlaying ? 'Playing' : this.snapshot.trackId ? 'Paused' : 'Idle',
       expiresAt: r?.expiresAt,
     };
+  }
+
+  /** Seconds of audio buffered ahead of the playhead (audio backend only).
+   *  Exposed so diagnostics UI never reaches into the private element —
+   *  the engine stays the sole audio owner. */
+  getBufferedAhead(): number | null {
+    try {
+      if (this.snapshot.backend !== 'audio' || !this.audio) return null;
+      const buf = this.audio.buffered;
+      if (!buf || !buf.length) return 0;
+      return Math.max(0, buf.end(buf.length - 1) - this.audio.currentTime);
+    } catch {
+      return null;
+    }
   }
 
   // ——— OS integration ———

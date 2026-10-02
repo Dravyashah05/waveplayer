@@ -295,3 +295,27 @@ main img { -webkit-user-drag: none; }
 @media (max-width: 640px) {
   h1, h2 { overflow-wrap: break-word; }
 }
+
+/* ——— Mobile perf + touch ——— */
+/* 1. Kill hover-only transforms on touch devices (no sticky hover, less paint) */
+@media (hover: none) {
+  .hover-lift:hover, .lg-card:hover, .glass-hover:hover { transform: none; }
+  /* touch users get focus/active feedback instead */
+  .pressable:active { transform: scale(0.97); }
+}
+/* 2. Defer offscreen rails/cards — big win on long mobile feeds */
+@media (max-width: 768px) {
+  main .snap-start { content-visibility: auto; contain-intrinsic-size: auto 220px; }
+}
+/* 3. Cheap backdrop on low-end / small phones — heavy blur drains mobile GPU */
+@media (max-width: 640px) {
+  .liquid-dock, .glass-nav { backdrop-filter: saturate(140%) !important; -webkit-backdrop-filter: saturate(140%) !important; }
+  .glass-orb { display: none; }
+  .marquee__track { animation-duration: 20s; }
+}
+/* 4. Landscape phones: respect both notches, keep docks reachable */
+@media (max-height: 500px) and (orientation: landscape) {
+  .safe-bottom { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+}
+/* 5. Images: async decode + no drag fight with horizontal rails */
+img { -webkit-user-drag: none; user-select: none; }

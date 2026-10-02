@@ -253,6 +253,18 @@ class PlayerStore {
   }
 
   current(): Track | null { return this.tracks[this.index] ?? null; }
+  /** Predict the exact item next() will select without mutating queue state. */
+  peekNext(): Track | null {
+    if (!this.tracks.length || this.index < 0) return null;
+    if (this._repeat === 'one') return this.current();
+    if (this._shuffle) {
+      if (this.shuffleOrder.length < 2) return this.current();
+      const nextPtr = (this.shufflePtr + 1) % this.shuffleOrder.length;
+      return this.tracks[this.shuffleOrder[nextPtr]] ?? null;
+    }
+    if (this.index + 1 < this.tracks.length) return this.tracks[this.index + 1] ?? null;
+    return this._repeat === 'all' ? this.tracks[0] ?? null : null;
+  }
   queue(): Track[] { return this.tracks; }
   currentIndex(): number { return this.index; }
 

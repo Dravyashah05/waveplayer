@@ -38,6 +38,16 @@ import { playerEngine, usePlayerEngine } from '../services/playerEngine';
 import { StatsPanel } from './StatsPanel';
 import { AlbumCanvas } from './AlbumCanvas';
 import { toast } from './Toast';
+import {
+  canDownloadOffline,
+  cancelOfflineDownload,
+  formatBytes,
+  getOfflineEntry,
+  queueOfflineDownload,
+  removeOfflineDownload,
+  retryOfflineDownload,
+  subscribeOffline,
+} from '../services/offlineDownloads';
 
 interface Props {
   onOpenQueue?: () => void;
@@ -147,6 +157,10 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
     };
   }, []);
 
+  // Re-render download menu rows on offline state changes
+  const [, setDlTick] = useState(0);
+  useEffect(() => subscribeOffline(() => setDlTick((n) => n + 1)), []);
+
   // Surface engine errors once (the engine auto-skips poisoned tracks first)
   const lastErrorRef = useRef<string | null>(null);
   useEffect(() => {
@@ -250,20 +264,66 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
     setMenuOpen(false);
   };
 
-  const handleDownload = () => {
+  const handleDownloadAction = () => {
     if (!track) return;
-    const url = resolved?.downloadUrl || track.downloadUrl || resolved?.streamUrl || track.streamUrl;
-    if (!url) {
-      return;
+    const st = getOfflineEntry(track.id)?.state;
+    if (st === 'completed') {
+      void removeOfflineDownload(track.id);
+      toast.success(`Removed offline copy`);
+    } else if (st === 'queued' || st === 'downloading') {
+      cancelOfflineDownload(track.id);
+    } else if (st === 'failed' || st === 'cancelled') {
+      retryOfflineDownload(track.id);
+    } else if (canDownloadOffline(track).eligible) {
+      queueOfflineDownload(track);
     }
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${track.title} - ${track.author}.mp3`;
-    a.target = '_blank';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    setMenuOpen(false);
   };
+
+  const downloadMenu = (() => {
+    if (!track || track.source === 'local') return null;
+    const entry = getOfflineEntry(track.id);
+    if (entry?.state === 'completed') {
+      return {
+        label: `Downloaded${typeof entry.size === 'number' ? ` • ${formatBytes(entry.size)}` : ''}`,
+        icon: <Check className="h-4 w-4 shrink-0 text-emerald-400" />,
+        disabled: false as const,
+        title: 'Remove the offline copy',
+      };
+    }
+    if (entry?.state === 'queued' || entry?.state === 'downloading') {
+      const pct = entry.state === 'downloading' ? ` ${Math.round((entry.progress || 0) * 100)}%` : '';
+      return {
+        label: `Downloading…${pct}`,
+        icon: <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white/60" />,
+        disabled: false as const,
+        title: 'Cancel the offline download',
+      };
+    }
+    if (entry?.state === 'failed') {
+      return {
+        label: 'Retry download',
+        icon: <Download className="h-4 w-4 shrink-0 text-white/60" />,
+        disabled: false as const,
+        title: entry.error || 'Retry the offline download',
+      };
+    }
+    const gate = canDownloadOffline(track);
+    if (!gate.eligible) {
+      return {
+        label: 'Download',
+        icon: <Download className="h-4 w-4 shrink-0 text-white/25" />,
+        disabled: true as const,
+        title: gate.reason || 'Download unavailable',
+      };
+    }
+    return {
+      label: 'Download',
+      icon: <Download className="h-4 w-4 shrink-0 text-white/60" />,
+      disabled: false as const,
+      title: 'Download for offline listening',
+    };
+  })();
 
   const handleShare = () => {
     if (navigator.share && track) {
@@ -295,14 +355,6 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
   const seekMax = Math.max(1, Math.round(effectiveDuration));
   const seekValue = Math.min(Math.round(progress), seekMax);
 
-  // Synced lyrics line calculation
-  const currentLyricsIndex = syncedLyrics
-    ? syncedLyrics.findIndex((line, i) => {
-        const next = syncedLyrics[i + 1];
-        return progress >= line.time && (!next || progress < next.time);
-      })
-    : -1;
-
   if (!track) {
     return (
       <div className="fixed bottom-[calc(112px+env(safe-area-inset-bottom))] sm:bottom-[calc(108px+env(safe-area-inset-bottom))] lg:bottom-6 left-1/2 -translate-x-1/2 w-[calc(100%-12px)] sm:w-[calc(100%-24px)] max-w-[560px] lg:max-w-[640px] z-30 liquid-dock rounded-[22px] px-4 sm:px-5 py-3 sm:py-3.5 border border-white/[0.06] shadow-[0_12px_36px_rgba(0,0,0,0.6)]">
@@ -322,6 +374,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
         track={track}
         isPlaying={isPlaying}
         isBuffering={isBuffering}
+        progress={progress}
         duration={effectiveDuration}
         isFav={isFav}
         onOpen={() => setFullscreen(true)}
@@ -427,14 +480,18 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
                         <span className="flex-1">Repeat</span>
                         <span className={`text-[11px] font-bold capitalize ${repeat !== 'off' ? 'text-white' : 'text-white/40'}`}>{repeat}</span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => { handleDownload(); setMenuOpen(false); }}
-                        className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white/10 transition-colors"
-                      >
-                        <Download className="h-4 w-4 shrink-0 text-white/60" />
-                        <span className="flex-1">Download</span>
-                      </button>
+                      {downloadMenu && (
+                        <button
+                          type="button"
+                          onClick={handleDownloadAction}
+                          disabled={downloadMenu.disabled}
+                          title={downloadMenu.title}
+                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {downloadMenu.icon}
+                          <span className="flex-1">{downloadMenu.label}</span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => { handleShare(); setMenuOpen(false); }}
@@ -528,20 +585,16 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
                       <LyricsView
                         synced={syncedLyrics}
                         plain={plainLyrics}
-                        currentIndex={currentLyricsIndex}
                         isPlaying={isPlaying}
                         source={lyricsSource}
                         loading={lyricsLoading}
                         progress={progress}
                         duration={effectiveDuration}
-                        onSeek={(idx) => {
-                          if (syncedLyrics && syncedLyrics[idx]) {
-                            playerEngine.seek(syncedLyrics[idx].time);
-                          }
-                        }}
+                        onSeek={(seconds) => playerEngine.seek(seconds)}
                         artwork={track.thumbnail}
                         title={track.title}
                         artist={track.author}
+                        trackId={track.id}
                       />
                     </div>
                   </div>

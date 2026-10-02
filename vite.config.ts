@@ -16,15 +16,23 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
+    cssMinify: true,
+    sourcemap: false,
+    assetsInlineLimit: 4096,
+    reportCompressedSize: false,
+    modulePreload: { polyfill: false },
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
         manualChunks: {
-          motion: ['motion'],
           vendor: ['react', 'react-dom'],
+          motion: ['motion'],
           icons: ['lucide-react'],
         },
       },
     },
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'lucide-react'],
   },
 });

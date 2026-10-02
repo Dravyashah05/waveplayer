@@ -1,65 +1,108 @@
 import { useRef, useEffect, useState } from 'react';
-import { motion } from 'motion/react';
 import { Mic2, Loader2 } from 'lucide-react';
-import { SyncedLine } from '../services/ytmusicApi';
+import type { SyncedLine } from '../services/ytmusicApi';
+import { canSeekLyricsLine, isManualScrollSuspended, manualScrollUntil, normalizeLyrics, wordAt } from '../services/lyricsSources';
 import { settingsStore } from '../services/settingsStore';
 
 interface Props {
   synced: SyncedLine[] | null;
   plain: string[] | null;
-  currentIndex: number;
   isPlaying: boolean;
   source: string | null;
   loading: boolean;
   progress: number;
   duration: number;
-  onSeek: (index: number) => void;
+  onSeek: (seconds: number) => void;
   artwork?: string;
   title?: string;
   artist?: string;
+  trackId?: string;
   onClose?: () => void;
 }
 
-export const LyricsView: React.FC<Props> = ({ synced, plain, currentIndex, isPlaying, loading, onSeek, progress }) => {
-  const lines = synced ? synced.map((s) => s.text) : plain || [];
-  const lineRefs = useRef<(HTMLParagraphElement | null)[]>([]);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isSynced = !!synced?.length;
-  const holdUntil = useRef(0);
+export const LyricsView: React.FC<Props> = ({ synced, plain, isPlaying, loading, onSeek, progress, source, title, artist, trackId }) => {
+  const lineRefs = useRef<(HTMLParagraphElement | HTMLButtonElement | null)[]>([]);
+  const overrideTimer = useRef<number | null>(null);
+  const programmaticScroll = useRef(false);
+  const programmaticScrollTimer = useRef<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(() => settingsStore.get().lyricsAutoScroll);
+  const [manualOverride, setManualOverride] = useState(false);
+  const [resumeRequested, setResumeRequested] = useState(false);
+  const normalized = normalizeLyrics(source || 'lyrics', synced, plain);
+  const lines = normalized?.lines || [];
+  const isSynced = !!normalized?.synced;
+  const position = wordAt(lines, progress);
+  const activeIndex = isSynced ? position.line : -1;
+  const scrollEnabled = !manualOverride && (autoScroll || resumeRequested);
+
   useEffect(() => {
     const unsub = settingsStore.subscribe(() => setAutoScroll(settingsStore.get().lyricsAutoScroll));
-    return () => {
-      unsub();
-    };
+    return unsub;
   }, []);
 
   useEffect(() => {
-    if (!autoScroll) return;
-    if (currentIndex >= 0 && Date.now() > holdUntil.current && lineRefs.current[currentIndex]) {
-      lineRefs.current[currentIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, [currentIndex, autoScroll]);
+    if (!scrollEnabled || !isPlaying || activeIndex < 0) return;
+    programmaticScroll.current = true;
+    lineRefs.current[activeIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (programmaticScrollTimer.current != null) window.clearTimeout(programmaticScrollTimer.current);
+    programmaticScrollTimer.current = window.setTimeout(() => {
+      programmaticScroll.current = false;
+      programmaticScrollTimer.current = null;
+    }, 700);
+  }, [activeIndex, isPlaying, scrollEnabled]);
 
-  const onUserScroll = () => {
-    // Manual scroll override: pause auto-scroll briefly so reading isn't yanked.
-    holdUntil.current = Date.now() + 10000;
+  useEffect(() => {
+    if (overrideTimer.current != null) window.clearTimeout(overrideTimer.current);
+    setManualOverride(false);
+    setResumeRequested(false);
+    return () => {
+      if (overrideTimer.current != null) window.clearTimeout(overrideTimer.current);
+      if (programmaticScrollTimer.current != null) window.clearTimeout(programmaticScrollTimer.current);
+    };
+  }, [title, artist, trackId]);
+
+  useEffect(() => () => {
+    if (overrideTimer.current != null) window.clearTimeout(overrideTimer.current);
+    if (programmaticScrollTimer.current != null) window.clearTimeout(programmaticScrollTimer.current);
+  }, []);
+
+  const pauseAutoScroll = () => {
+    setManualOverride(true);
+    setResumeRequested(false);
+    if (overrideTimer.current != null) window.clearTimeout(overrideTimer.current);
+    const until = manualScrollUntil(Date.now());
+    overrideTimer.current = window.setTimeout(() => {
+      if (!isManualScrollSuspended(until, Date.now())) setManualOverride(false);
+      overrideTimer.current = null;
+    }, Math.max(0, until - Date.now()));
+  };
+
+  const resumeSync = () => {
+    if (overrideTimer.current != null) window.clearTimeout(overrideTimer.current);
+    overrideTimer.current = null;
+    setManualOverride(false);
+    setResumeRequested(true);
+    if (activeIndex >= 0) {
+      programmaticScroll.current = true;
+      lineRefs.current[activeIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (programmaticScrollTimer.current != null) window.clearTimeout(programmaticScrollTimer.current);
+      programmaticScrollTimer.current = window.setTimeout(() => {
+        programmaticScroll.current = false;
+        programmaticScrollTimer.current = null;
+      }, 700);
+    }
+  };
+
+  const onManualScroll = () => {
+    if (!programmaticScroll.current) pauseAutoScroll();
   };
 
   if (loading) {
     return (
-      <div className="flex flex-1 flex-col h-full min-h-0">
-        <div className="flex-1 flex flex-col justify-center px-2 sm:px-4 py-10 space-y-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div
-              key={i}
-              className="h-[22px] sm:h-[26px] rounded-full bg-white/[0.06] animate-pulse"
-              style={{ width: `${42 + (i % 4) * 14}%`, opacity: 1 - i * 0.08 }}
-            />
-          ))}
-          <p className="text-[11px] tracking-widest uppercase text-white/35 flex items-center gap-2 mt-6">
-            <Loader2 className="h-3 w-3 animate-spin" /> Loading lyrics
-          </p>
+      <div className="flex h-full min-h-0 flex-1 flex-col">
+        <div className="flex flex-1 flex-col justify-center space-y-3 px-2 py-10 sm:px-4">
+          {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-[22px] animate-pulse rounded-full bg-white/[0.06] sm:h-[26px]" style={{ width: `${42 + (i % 4) * 14}%`, opacity: 1 - i * 0.08 }} />)}
+          <p className="mt-6 flex items-center gap-2 text-[11px] uppercase tracking-widest text-white/35"><Loader2 className="h-3 w-3 animate-spin" /> Loading lyrics</p>
         </div>
       </div>
     );
@@ -67,126 +110,77 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, currentIndex, isPla
 
   if (!lines.length) {
     return (
-      <div className="flex flex-1 flex-col h-full min-h-0 items-center justify-center px-6 py-20 text-center">
-        <div className="h-14 w-14 rounded-full bg-white/[0.06] border border-white/[0.06] flex items-center justify-center">
-          <Mic2 className="h-6 w-6 text-white/30" />
-        </div>
+      <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center px-6 py-20 text-center">
+        <div className="flex h-14 w-14 items-center justify-center rounded-full border border-white/[0.06] bg-white/[0.06]"><Mic2 className="h-6 w-6 text-white/30" /></div>
         <p className="mt-4 text-[15px] font-semibold text-white">No lyrics found</p>
-        <p className="mt-1.5 text-xs text-white/40 max-w-[260px] leading-relaxed">
-          We couldn’t find synced lyrics for this track. Try another song.
-        </p>
+        <p className="mt-1.5 max-w-[260px] text-xs leading-relaxed text-white/40">Lyrics aren’t available for this track.</p>
       </div>
     );
   }
 
   return (
-    <div ref={containerRef} className="flex flex-1 flex-col h-full min-h-0 relative">
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none scroll-smooth" onWheel={onUserScroll} onTouchMove={onUserScroll}>
-        <div className="px-2 sm:px-4 lg:px-6 py-8">
-          {currentIndex === -1 && (
-            <p className="text-center text-[12px] tracking-widest uppercase text-white/25 py-8 font-medium">
-              {isSynced ? 'Intro — tap any line to jump' : 'Plain lyrics'}
-            </p>
-          )}
-
+    <div className="relative flex h-full min-h-0 flex-1 flex-col">
+      {manualOverride && isSynced && (
+        <button type="button" onClick={resumeSync} className="absolute right-3 top-2 z-10 rounded-full border border-white/15 bg-black/70 px-3 py-1.5 text-xs font-semibold text-white shadow-lg backdrop-blur" aria-label="Resume lyric synchronization">
+          Resume sync
+        </button>
+      )}
+      <div
+        className="min-h-0 flex-1 overflow-y-auto scrollbar-none scroll-smooth"
+        onWheel={pauseAutoScroll}
+        onTouchMove={pauseAutoScroll}
+        onScroll={onManualScroll}
+        onKeyDown={(event) => {
+          if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) pauseAutoScroll();
+        }}
+        tabIndex={0}
+        aria-label="Lyrics"
+      >
+        <div className="px-2 py-8 sm:px-4 lg:px-6">
+          {isSynced && activeIndex === -1 && <p className="py-8 text-center text-[12px] font-medium uppercase tracking-widest text-white/25">Intro — lyrics follow playback</p>}
           {lines.map((line, i) => {
-            const isActive = i === currentIndex;
-            const isPast = i < currentIndex;
-            const distance = Math.abs(i - currentIndex);
-            // Word timing only when the provider actually supplied it.
-            const words = isActive ? synced?.[i]?.words : undefined;
-            const hasWords = !!words?.length;
-            let activeWord = -1;
-            if (hasWords) {
-              for (let w = 0; w < words.length; w++) {
-                if ((progress ?? 0) >= words[w].start) activeWord = w;
-                else break;
-              }
-            }
-
-            // focus = big + sharp, others = smaller + blurred (Apple Music style)
-            let opacity = 0.12;
-            let blur = 5;
-            let scale = 0.96;
-            if (isActive) {
-              opacity = 1;
-              blur = 0;
-              scale = 1;
-            } else if (distance === 1) {
-              opacity = isPast ? 0.55 : 0.62;
-              blur = 0.8;
-              scale = 0.985;
-            } else if (distance === 2) {
-              opacity = 0.32;
-              blur = 2.2;
-              scale = 0.97;
-            } else if (distance === 3) {
-              opacity = 0.18;
-              blur = 3.5;
-              scale = 0.96;
-            } else {
-              opacity = 0.1;
-              blur = 5;
-              scale = 0.95;
-            }
-
-            return (
-              <motion.p
-                key={`${i}-${line.slice(0, 24)}`}
-                ref={(el) => {
-                  lineRefs.current[i] = el;
-                }}
-                initial={{ opacity: 0, y: 12, filter: 'blur(6px)' }}
-                animate={{ opacity, y: 0, scale, filter: `blur(${blur}px)` }}
-                transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-                onClick={() => onSeek(i)}
-                className={`group cursor-pointer select-none will-change-transform ${isActive ? 'py-4 sm:py-5' : 'py-3 sm:py-3.5'}`}
-                style={{ transformOrigin: 'left center' }}
-              >
-                <span
-                  className={`block tracking-[-0.04em] transition-all break-words text-balance ${
-                    isActive
-                      ? 'text-[27px] min-[400px]:text-[32px] sm:text-[48px] lg:text-[56px] xl:text-[62px] font-black leading-[1.15] text-white'
-                      : 'text-[17px] min-[400px]:text-[19px] sm:text-[22px] lg:text-[26px] font-semibold leading-[1.6] text-white'
-                  }`}
-                  style={{
-                    textShadow: isActive
-                      ? '0 4px 32px rgba(0,0,0,0.95), 0 1px 2px rgba(0,0,0,0.8)'
-                      : '0 1px 14px rgba(0,0,0,0.45)',
-                  }}
-                >
-                  <span className={isActive ? 'bg-gradient-to-r from-white to-white bg-clip-text' : ''}>
-                    {hasWords && words ? (
-                      words.map((w, wi) => (
-                        <span
-                          key={wi}
-                          className={
-                            wi === activeWord
-                              ? 'text-white drop-shadow-[0_0_18px_rgba(255,255,255,0.65)]'
-                              : wi < activeWord
-                                ? 'text-white/85'
-                                : 'text-white/45'
-                          }
-                        >
-                          {w.text}{' '}
-                        </span>
-                      ))
-                    ) : (
-                      line || <span className="opacity-20">—</span>
-                    )}
+            const isActive = i === activeIndex;
+            const distance = activeIndex < 0 ? 99 : Math.abs(i - activeIndex);
+            const canSeek = isSynced && canSeekLyricsLine(line);
+            const words = line.words?.some((word) => typeof word.start === 'number') ? line.words : undefined;
+            const activeWord = isActive && words ? position.word : -1;
+            const opacity = !isSynced ? 0.9 : isActive ? 1 : distance === 1 ? 0.62 : distance === 2 ? 0.32 : 0.14;
+            const content = (
+              <>
+                {words ? words.map((word, wordIndex) => (
+                  <span key={wordIndex} className={`transition-colors duration-200 ${wordIndex === activeWord ? 'text-white drop-shadow-[0_0_18px_rgba(255,255,255,0.65)]' : wordIndex < activeWord ? 'text-white/85' : 'text-white/45'}`}>
+                    {word.text}{wordIndex < words.length - 1 ? ' ' : ''}
                   </span>
-                  {isActive && (
-                    <span className="ml-3 inline-block h-[4px] w-8 rounded-full bg-white align-middle opacity-90 -translate-y-1.5 shadow-[0_2px_12px_rgba(255,255,255,0.5)]" />
-                  )}
-                </span>
-              </motion.p>
+                )) : line.text || <span className="opacity-30">—</span>}
+              </>
+            );
+            const sharedClass = `block w-full break-words py-3 text-left text-balance tracking-[-0.04em] transition-[opacity,transform,color] duration-300 ${isActive ? 'py-4 sm:py-5' : ''} ${canSeek ? 'cursor-pointer' : 'cursor-default'}`;
+            const sharedStyle = { opacity, transform: isActive ? 'scale(1)' : `scale(${distance === 1 ? 0.985 : 0.96})`, textShadow: isActive ? '0 4px 32px rgba(0,0,0,0.85)' : undefined };
+
+            return canSeek ? (
+              <button
+                key={`${i}-${line.text.slice(0, 24)}`}
+                ref={(el) => { lineRefs.current[i] = el; }}
+                type="button"
+                onClick={() => onSeek(line.start!)}
+                className={`${sharedClass} ${isActive ? 'text-[27px] font-black leading-[1.15] text-white min-[400px]:text-[32px] sm:text-[48px] lg:text-[56px]' : 'text-[17px] font-semibold leading-[1.6] text-white min-[400px]:text-[19px] sm:text-[22px] lg:text-[26px]'}`}
+                style={sharedStyle}
+                aria-current={isActive ? 'true' : undefined}
+                aria-label={`Seek to lyric: ${line.text}`}
+              >{content}</button>
+            ) : (
+              <p
+                key={`${i}-${line.text.slice(0, 24)}`}
+                ref={(el) => { lineRefs.current[i] = el; }}
+                className={`${sharedClass} ${isActive ? 'text-[27px] font-black leading-[1.15] text-white min-[400px]:text-[32px] sm:text-[48px] lg:text-[56px]' : 'text-[17px] font-semibold leading-[1.6] text-white min-[400px]:text-[19px] sm:text-[22px] lg:text-[26px]'}`}
+                style={sharedStyle}
+              >{content}</p>
             );
           })}
-
-          <div className="pt-12 pb-2 flex items-center justify-center gap-2">
+          <div className="flex items-center justify-center gap-2 pb-2 pt-12">
             <span className="h-px w-6 bg-white/10" />
-            <p className="text-[10px] tracking-[0.18em] uppercase text-white/25 font-medium">
-              {isSynced ? (isPlaying ? 'Live synced • tap to seek' : 'Synced • paused') : 'Plain lyrics'}
+            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/25">
+              {isSynced ? (isPlaying ? 'Live synced • tap a line to seek' : 'Synced • paused') : 'Lyrics'}
             </p>
             <span className="h-px w-6 bg-white/10" />
           </div>

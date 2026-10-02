@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Activity } from 'lucide-react';
-import { playerEngine } from '../services/playerEngine';
+import { playerEngine, usePlayerEngine } from '../services/playerEngine';
 import type { Track } from '../types';
 
 interface Props {
@@ -10,88 +10,90 @@ interface Props {
   track: Track | null;
 }
 
-function Row({ k, v }: { k: string; v: string }) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 py-1.5">
-      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/40">{k}</span>
-      <span className="truncate font-mono text-xs text-white/90">{v}</span>
+    <div className="flex items-baseline justify-between gap-4 py-2">
+      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/45">{label}</span>
+      <span className="truncate text-right font-mono text-xs text-white/90">{value || 'Unknown'}</span>
     </div>
   );
 }
 
-/** Stats for Nerds — every value comes from resolved stream metadata or the
- *  live element. Anything unknowable renders as Unknown; nothing is faked. */
-export const StatsPanel: React.FC<Props> = ({ isOpen, onClose, track }) => {
-  const [, force] = useState(0);
+function formatDuration(seconds: number): string {
+  if (!(seconds > 0) || !Number.isFinite(seconds)) return 'Unknown';
+  const whole = Math.floor(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+/** Reusable diagnostics view. It observes the engine; it never creates an audio element. */
+export const StatsForNerds: React.FC<Props> = ({ isOpen, onClose, track }) => {
+  usePlayerEngine();
+  const [, refreshNetwork] = useState(0);
   useEffect(() => {
     if (!isOpen) return;
-    const t = window.setInterval(() => force((n) => n + 1), 1000);
-    return () => window.clearInterval(t);
+    const connection = (navigator as any)?.connection;
+    const update = () => refreshNetwork((n) => n + 1);
+    connection?.addEventListener?.('change', update);
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => {
+      connection?.removeEventListener?.('change', update);
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+    };
   }, [isOpen]);
-  if (!isOpen) return null;
 
-  const s = playerEngine.getStats();
-  const conn = (navigator as any)?.connection;
-  const net = conn
-    ? `${conn.effectiveType || 'unknown'}${conn.saveData ? ' • save-data' : ''}${conn.downlink ? ` • ${conn.downlink} Mb/s` : ''}`
+  if (!isOpen) return null;
+  const stats = playerEngine.getStats();
+  const buffered = typeof stats.bufferedSeconds === 'number' && Number.isFinite(stats.bufferedSeconds)
+    ? `${stats.bufferedSeconds.toFixed(1)}s`
     : 'Unknown';
-  const buffer = (() => {
-    try {
-      const el = (playerEngine as any)?.audio as HTMLAudioElement | null;
-      const buf = el?.buffered;
-      if (buf && buf.length) {
-        const ahead = Math.max(0, buf.end(buf.length - 1) - (el?.currentTime || 0));
-        return `${ahead.toFixed(1)}s buffered`;
-      }
-    } catch {}
-    return s.backend === 'youtube' ? 'player-managed' : 'Unknown';
-  })();
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm" onClick={onClose}>
-        <motion.div
-          initial={{ opacity: 0, y: 16, scale: 0.98 }}
+      <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={onClose}>
+        <motion.section
+          initial={{ opacity: 0, y: 20, scale: 0.99 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 16, scale: 0.98 }}
-          transition={{ duration: 0.2 }}
+          exit={{ opacity: 0, y: 20, scale: 0.99 }}
+          transition={{ duration: 0.18 }}
           onClick={(e) => e.stopPropagation()}
-          className="w-full max-w-sm overflow-hidden rounded-[24px] border border-white/10 bg-[#121214]/95 shadow-2xl backdrop-blur-2xl"
+          className="max-h-[82dvh] w-full overflow-hidden rounded-t-[26px] border border-white/10 bg-[#121214]/95 shadow-2xl backdrop-blur-2xl sm:max-w-md sm:rounded-[24px]"
           role="dialog"
           aria-modal="true"
-          aria-label="Stats for nerds"
+          aria-label="Stats for Nerds"
         >
-          <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
-            <div className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white">
-                <Activity className="h-4 w-4" />
-              </span>
-              <div>
-                <h3 className="text-[15px] font-bold tracking-tight text-white">Stats for Nerds</h3>
+          <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-white/20 sm:hidden" />
+          <header className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-white"><Activity className="h-4 w-4" /></span>
+              <div className="min-w-0">
+                <h2 className="text-[15px] font-bold tracking-tight text-white">Stats for Nerds</h2>
                 <p className="truncate text-[11px] font-medium text-white/50">{track ? `${track.title} — ${track.author}` : 'No track'}</p>
               </div>
             </div>
-            <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-white/60 hover:bg-white/15 hover:text-white" aria-label="Close stats">
+            <button onClick={onClose} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/5 text-white/60 hover:bg-white/15 hover:text-white" aria-label="Close stats">
               <X className="h-4 w-4" />
             </button>
+          </header>
+          <div className="max-h-[calc(82dvh-80px)] overflow-y-auto px-5 py-3 pb-[max(1rem,env(safe-area-inset-bottom))] scrollbar-none">
+            <Row label="Source" value={stats.source} />
+            <Row label="Codec" value={stats.codec} />
+            <Row label="Bitrate" value={stats.bitrate} />
+            <Row label="Sample rate" value={stats.sampleRate} />
+            <Row label="Bit depth" value={stats.bitDepth} />
+            <Row label="Channels" value={stats.channels} />
+            <Row label="Container" value={stats.container} />
+            <Row label="Duration" value={formatDuration(stats.duration)} />
+            <Row label="Buffer" value={buffered} />
+            <Row label="Network" value={stats.networkType} />
+            <Row label="Playback state" value={stats.playbackState} />
+            {stats.isLossless !== null && <Row label="Audio type" value={stats.isLossless ? 'Lossless' : 'Lossy'} />}
           </div>
-          <div className="max-h-[60vh] overflow-y-auto px-5 py-3 scrollbar-none">
-            <Row k="Source" v={s.source} />
-            <Row k="Backend" v={s.backend} />
-            <Row k="Codec" v={s.codec} />
-            <Row k="Bitrate" v={s.bitrate} />
-            <Row k="Sample rate" v={s.sampleRate} />
-            <Row k="Bit depth" v={s.bitDepth} />
-            <Row k="Channels" v={s.channels} />
-            <Row k="Container" v={s.container} />
-            <Row k="Host" v={s.host} />
-            <Row k="Buffer" v={buffer} />
-            <Row k="Network" v={net} />
-            <Row k="Playback" v={`${s.progress.toFixed(1)}s / ${s.duration.toFixed(1)}s`} />
-            {typeof s.expiresAt === 'number' && <Row k="Stream expiry" v={new Date(s.expiresAt).toLocaleTimeString()} />}
-          </div>
-        </motion.div>
+        </motion.section>
       </div>
     </AnimatePresence>
   );
 };
+
+export const StatsPanel = StatsForNerds;

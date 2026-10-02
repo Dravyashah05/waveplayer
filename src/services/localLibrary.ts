@@ -68,16 +68,22 @@ function probeDuration(file: File): Promise<number> {
       const url = URL.createObjectURL(file);
       const el = document.createElement('audio');
       el.preload = 'metadata';
-      const done = (v: number) => {
-        try {
-          URL.revokeObjectURL(url);
-        } catch {}
+      let timer: number | null = window.setTimeout(() => cleanup(0), 8000);
+      const cleanup = (v: number) => {
+        if (timer !== null) {
+          try { window.clearTimeout(timer); } catch {}
+          timer = null;
+        }
+        el.onloadedmetadata = null;
+        el.onerror = null;
+        // Never added to the DOM and never played — metadata probe only.
+        el.removeAttribute('src');
+        try { URL.revokeObjectURL(url); } catch {}
         resolve(v);
       };
-      el.onloadedmetadata = () => done(Number.isFinite(el.duration) ? Math.round(el.duration) : 0);
-      el.onerror = () => done(0);
+      el.onloadedmetadata = () => cleanup(Number.isFinite(el.duration) ? Math.round(el.duration) : 0);
+      el.onerror = () => cleanup(0);
       el.src = url;
-      setTimeout(() => done(0), 8000);
     } catch {
       resolve(0);
     }

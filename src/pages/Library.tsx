@@ -62,6 +62,12 @@ import {
   sortTracks,
 } from '../services/libraryStore';
 import { getRecentlyPlayed, getListeningEvents, getPlayCount } from '../services/listeningStore';
+import {
+  formatBytes,
+  getOfflineEntry,
+  listOfflineTracks,
+  subscribeOffline,
+} from '../services/offlineDownloads';
 
 export type TabId = 'songs' | 'albums' | 'artists' | 'playlists' | 'favs' | 'recent' | 'downloads';
 type SongFilter = 'all' | 'liked' | 'recent' | 'added';
@@ -156,6 +162,11 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
       unsub();
     };
   }, []);
+
+  // Offline downloads (IndexedDB): re-render counts and lists on change
+  const [offlineTick, setOfflineTick] = useState(0);
+  useEffect(() => subscribeOffline(() => setOfflineTick((n) => n + 1)), []);
+  const offlineTracks = useMemo(() => listOfflineTracks(), [offlineTick]);
 
   // Listen for storage events (listening events & playlist updates)
   useEffect(() => {
@@ -562,7 +573,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
     { id: 'playlists', label: 'Playlists', icon: ListMusic, count: localPlaylists.length + (youtubePlaylists.length || 0) },
     { id: 'favs', label: 'Liked', icon: Heart, count: favs.length },
     { id: 'recent', label: 'Recently Played', icon: Clock, count: recentlyPlayed.length },
-    { id: 'downloads', label: 'Downloads', icon: Download, count: history.length },
+    { id: 'downloads', label: 'Downloads', icon: Download, count: offlineTracks.length },
   ];
 
   return (
@@ -1583,7 +1594,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
           {/* ======================================================= */}
           {tab === 'downloads' && (
             <div className="space-y-4">
-              {history.length === 0 ? (
+              {offlineTracks.length === 0 ? (
                 <NoContent
                   variant="generic"
                   title="No downloaded tracks yet"
@@ -1593,8 +1604,10 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                 />
               ) : (
                 <div className="rounded-[20px] border border-white/10 bg-[#101012]/80 backdrop-blur-xl p-1 sm:p-2 divide-y divide-white/[0.04]">
-                  {history.map((t, idx) => {
+                  {offlineTracks.map((t, idx) => {
                     const isActive = currentTrack?.id === t.id;
+                    const entry = getOfflineEntry(t.id);
+                    const size = entry && typeof entry.size === 'number' ? ` • ${formatBytes(entry.size)}` : '';
                     return (
                       <SongRow
                         key={`${t.id}-${idx}`}
@@ -1602,8 +1615,8 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                         index={idx}
                         isActive={isActive}
                         isPlaying={isActive && isPlaying}
-                        onPlay={() => handlePlaySong(t, history)}
-                        subtitleExtra="Cached • High Quality"
+                        onPlay={() => handlePlaySong(t, offlineTracks)}
+                        subtitleExtra={`Downloaded${size}`}
                         onOpenMenu={handleOpenContextMenu}
                         onNavigate={onNavigate}
                       />

@@ -24,7 +24,9 @@
     "preview": "vite preview --port=3001",
     "lint": "tsc --noEmit",
     "test:recommendations": "tsx --test src/services/recommendation/recommendation.test.ts",
-    "test:stream": "tsx --test src/services/streamPlayback.test.ts server/youtubeStream.test.ts"
+    "test:stream": "tsx --test src/services/streamPlayback.test.ts server/youtubeStream.test.ts",
+    "test:sources": "tsx --test src/services/audioSourceManager.test.ts",
+    "test:offline": "tsx --test src/services/offlineDownloads.test.ts"
   },
   "dependencies": {
     "@types/crypto-js": "^4.2.2",

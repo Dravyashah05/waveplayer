@@ -7,6 +7,7 @@ interface MiniPlayerProps {
   track: Track;
   isPlaying: boolean;
   isBuffering: boolean;
+  progress?: number;
   duration: number;
   isFav: boolean;
   onOpen: () => void;
@@ -36,6 +37,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({
   track,
   isPlaying,
   isBuffering,
+  progress = 0,
   duration,
   isFav,
   onOpen,
@@ -45,6 +47,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({
   onToggleFav,
 }) => {
   const safeDuration = duration > 1 ? duration : 180;
+  const pct = Math.min(100, Math.max(0, (progress / safeDuration) * 100));
 
   return (
     <motion.div
@@ -76,7 +79,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({
           transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
           className={`relative h-11 w-11 sm:h-12 sm:w-12 overflow-hidden bg-[#1a1a1a] ring-1 shrink-0 shadow-[0_8px_24px_rgba(0,0,0,0.6)] rounded-[17px] ring-white/15`}
         >
-          <img src={track.thumbnail} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+          <img src={track.thumbnail} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" decoding="async" draggable={false} />
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/[0.18] via-transparent to-transparent" />
         </motion.div>
 
@@ -122,7 +125,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({
             onClick={onToggle}
             aria-label={isPlaying ? 'Pause' : 'Play'}
             title={isPlaying ? 'Pause' : 'Play'}
-            className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center ring-1 ring-white/20 shadow-[0_8px_20px_rgba(0,0,0,0.5)]"
+            className="h-11 w-11 rounded-full bg-white text-black flex items-center justify-center ring-1 ring-white/20 shadow-[0_8px_20px_rgba(0,0,0,0.5)]"
           >
             <motion.span
               key={isBuffering ? 'loading' : isPlaying ? 'pause' : 'play'}
@@ -147,6 +150,11 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({
           >
             <SkipForward className="h-4 w-4 fill-current" />
           </button>
+        </div>
+
+        {/* Progress — thin bar so mobile users see position without opening */}
+        <div className="pointer-events-none absolute inset-x-4 bottom-1 h-[3px] overflow-hidden rounded-full bg-white/10" aria-hidden>
+          <div className="h-full rounded-full bg-white/80" style={{ width: `${pct}%` }} />
         </div>
 
       </div>

@@ -1,7 +1,9 @@
-import React, { Suspense, lazy, useEffect, useState, useRef } from 'react';
+import React, { Suspense, lazy, useEffect, useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Loader2 } from 'lucide-react';
-import { WavePlayerNavbar } from './components/WavePlayerNavbar';
+import { AppHeader } from './components/layout/AppHeader';
+import { DesktopSidebar } from './components/layout/DesktopSidebar';
+import { ArtworkBackground } from './components/ui/ArtworkBackground';
 import { PlayerBar } from './components/PlayerBar';
 import { QueueDrawer } from './components/QueueDrawer';
 import { ToastViewport } from './components/Toast';
@@ -9,9 +11,9 @@ import { PwaChrome } from './components/PwaChrome';
 import { RouteBoundary } from './components/RouteBoundary';
 import { BottomNavigation } from './components/BottomNavigation';
 import { perfMark, perfMeasure } from './services/perf';
-// Critical shell stays eager (Home + player chrome). Search and all secondary
-// pages split into lazy chunks so first paint never waits for them; the navbar
-// prefetches Search on focus so opening it still feels instant.
+
+// Critical shell stays eager (Home + player chrome). Secondary pages split
+// into lazy chunks for fast first paint; header prefetches on focus.
 import { HomePage } from './pages/Home';
 const SearchPage = lazy(() => import('./pages/Search').then((m) => ({ default: m.SearchPage })));
 const LibraryPage = lazy(() => import('./pages/Library').then((m) => ({ default: m.LibraryPage })));
@@ -22,6 +24,7 @@ const NowPlayingPage = lazy(() => import('./pages/NowPlaying').then((m) => ({ de
 const ExplorePage = lazy(() => import('./pages/Explore').then((m) => ({ default: m.ExplorePage })));
 const SettingsPage = lazy(() => import('./pages/Settings').then((m) => ({ default: m.SettingsPage })));
 const ProfilePage = lazy(() => import('./pages/Profile').then((m) => ({ default: m.ProfilePage })));
+
 import { usePlaybackShortcuts } from './hooks/usePlaybackShortcuts';
 import { ytmusicSuggestions } from './services/ytmusicApi';
 import { playerStore } from './services/playerStore';
@@ -53,10 +56,6 @@ const pageLoaders: Record<string, () => Promise<unknown>> = {
   profile: () => import('./pages/Profile'),
 };
 
-/**
- * Warm a lazy page chunk on hover/focus of a major nav item. Never on
- * startup, never more than once per page — data still loads on navigation.
- */
 const prefetchedPages = new Set<string>();
 export function prefetchPage(page: string): void {
   if (prefetchedPages.has(page)) return;
@@ -79,11 +78,11 @@ function PageFallback() {
 }
 
 function AppContent() {
-  // First interactive paint of the shell (dev-only measurement).
   useEffect(() => {
     perfMark('shell:ready');
     perfMeasure('startup', 'bootstrap', 'shell:ready');
   }, []);
+
   const [query, setQuery] = useState('');
   const [queue, setQueue] = useState<Track[]>(() => playerStore.queue());
   const [currentIndex, setCurrentIndex] = useState(() => playerStore.currentIndex());
@@ -103,19 +102,18 @@ function AppContent() {
   const [glassIntensity, setGlassIntensity] = useState(() => settingsStore.get().glassIntensity);
   const sugTimeout = useRef<number | null>(null);
 
-  // Smart autoplay: extend the queue before it runs dry (never touches the engine).
+  // Smart autoplay
   useEffect(() => startAutoplay(), []);
 
-  // Account isolation: when the signed-in user changes, private caches are
-  // wiped before new data loads — stale data never leaks across accounts.
+  // Account isolation
   useEffect(() => googleAccountStore.subscribe(() => {
     ensureAccountIsolation();
   }), []);
 
-  // Transport shortcuts (Space/K, arrows, N/P) — engine-owned, typing-safe.
+  // Transport keyboard shortcuts
   usePlaybackShortcuts(true);
 
-  // Background services: scrobbling + presence listen to player events only.
+  // Background services: scrobbling + presence
   useEffect(() => {
     registerScrobbleProviders();
     const off1 = startScrobbleService();
@@ -150,7 +148,7 @@ function AppContent() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // sync with playerStore
+  // Sync with playerStore
   useEffect(() => {
     const unsub = playerStore.subscribe(() => {
       setQueue([...playerStore.queue()]);
@@ -161,7 +159,8 @@ function AppContent() {
     });
     return () => { unsub(); };
   }, []);
-  // sync glass settings for modals
+
+  // Sync glass settings
   useEffect(() => {
     const unsub = settingsStore.subscribe(() => {
       setGlassEnabled(settingsStore.get().glassEnabled);
@@ -169,7 +168,8 @@ function AppContent() {
     });
     return () => { unsub(); };
   }, []);
-  // Liquid Glass theme vars — drive every .glass/.lg-* surface from settings
+
+  // Theme variables sync
   useEffect(() => {
     const root = document.documentElement;
     const sync = () => {
@@ -187,7 +187,7 @@ function AppContent() {
     return () => { unsub(); };
   }, []);
 
-  // suggestions debounce
+  // Suggestions debounce
   useEffect(() => {
     if (!query.trim() || !showSug) { setSuggestions([]); return; }
     if (sugTimeout.current) window.clearTimeout(sugTimeout.current);
@@ -197,19 +197,10 @@ function AppContent() {
     return () => { if (sugTimeout.current) window.clearTimeout(sugTimeout.current); };
   }, [query, showSug]);
 
-  // close suggestions when clicking outside header
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest('header')) setShowSug(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, []);
-
-  // global shortcuts
+  // Global search shortcut (/)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+      if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') return;
       if (e.key === '/') {
         e.preventDefault();
         const inputs = Array.from(document.querySelectorAll('header input')) as HTMLInputElement[];
@@ -221,7 +212,7 @@ function AppContent() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // fullscreen
+  // Fullscreen shortcuts
   useEffect(() => {
     const onFs = () => setIsAppFs(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onFs);
@@ -235,7 +226,7 @@ function AppContent() {
     return () => { document.removeEventListener('fullscreenchange', onFs); window.removeEventListener('keydown', onKeyFs); };
   }, []);
 
-  // close popups on Escape
+  // Close modals on Escape
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -252,7 +243,12 @@ function AppContent() {
     else document.exitFullscreen().catch(() => {});
   };
 
-  const handleSuggestionSelect = (s: string) => { setQuery(s); setSuggestions([]); setShowSug(false); navigate('search'); };
+  const handleSuggestionSelect = (s: string) => {
+    setQuery(s);
+    setSuggestions([]);
+    setShowSug(false);
+    navigate('search');
+  };
 
   const handleNavbarSearch = () => {
     if (!query.trim()) return;
@@ -265,11 +261,11 @@ function AppContent() {
     else { const qIdx = queue.findIndex(q => q.id === track.id); if (qIdx >= 0) playerStore.setIndex(qIdx); }
     if (idx === -1) playerStore.setQueue([track], 0);
   };
+
   const removeFromQueue = (idx: number) => { playerStore.removeFromQueue(idx); };
   const playIndex = (i: number) => playerStore.setIndex(i);
 
-  // Stable so memoized player chrome (MiniPlayer) skips unrelated re-renders.
-  const navigate = React.useCallback((p: Page, param?: string) => {
+  const navigate = useCallback((p: Page, param?: string) => {
     if (p === 'settings') { setSettingsOpen(true); return; }
     if (p === 'profile') { setProfilePopupOpen(true); return; }
     setNavStack((prev) => {
@@ -320,59 +316,29 @@ function AppContent() {
   };
 
   return (
-    <div className="h-[100dvh] w-full max-w-[100vw] overflow-hidden overflow-x-hidden flex flex-col bg-black text-white antialiased selection:bg-white selection:text-black">
-      {/* Dynamic cover-art background */}
-      {glassEnabled && current?.thumbnail && (
-        <div className="pointer-events-none fixed inset-0 -z-20 overflow-hidden">
-          <img
-            key={current.thumbnail}
-            src={current.thumbnail}
-            alt=""
-            referrerPolicy="no-referrer"
-            className="h-full w-full object-cover scale-110"
-            style={{
-              filter: `blur(${glassEnabled ? Math.round(48 + (glassIntensity / 100) * 32) : 64}px)`,
-              opacity: glassEnabled ? 0.22 : 0.18,
-            }}
-          />
-          <div
-            className="absolute inset-0"
-            style={{
-              backgroundColor: glassEnabled
-                ? `rgba(0,0,0,${(0.72 - (glassIntensity / 100) * 0.22).toFixed(2)})`
-                : 'rgba(0,0,0,0.68)',
-              backdropFilter: `blur(${glassEnabled ? Math.round((glassIntensity / 100) * 8) : 8}px)`,
-              WebkitBackdropFilter: `blur(${glassEnabled ? Math.round((glassIntensity / 100) * 8) : 8}px)`,
-            }}
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/70" />
-        </div>
-      )}
-      {/* AMOLED — void orbs */}
-      {glassEnabled && (
-      <>
-      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
-        <div className="absolute -top-40 left-1/2 h-[680px] w-[1020px] -translate-x-1/2 rounded-full bg-gradient-to-r from-white/[0.025] via-white/[0.015] to-white/[0.01] blur-[130px]" />
-        {/* Liquid Glass iridescence — whisper of refracted color in the void */}
-        <div className="absolute top-[-8%] left-[6%] h-[420px] w-[420px] rounded-full bg-indigo-500/[0.05] blur-[130px]" />
-        <div className="absolute bottom-[4%] right-[2%] h-[380px] w-[380px] rounded-full bg-cyan-400/[0.04] blur-[130px]" />
-        <div className="absolute top-[44%] -right-24 h-[560px] w-[560px] rounded-full bg-white/[0.012] blur-[150px]" />
-        <div className="absolute bottom-0 left-[-10%] h-[520px] w-[720px] rounded-full bg-white/[0.018] blur-[140px]" />
-        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-white/[0.012]" />
-      </div>
-      {/* Glass background */}
-      <div className="pointer-events-none fixed inset-0 -z-[5] bg-white/[0.02] backdrop-blur-[20px] ring-1 ring-white/[0.03] ring-inset" />
-      </>
-      )}
+    <div className="flex h-[100dvh] w-full max-w-[100vw] overflow-hidden bg-black text-white antialiased selection:bg-white selection:text-black">
+      {/* Artwork-driven ambient background */}
+      <ArtworkBackground thumbnail={current?.thumbnail} />
 
-      {/* Rebuilt Mixed Navbar — sidebar + navbar combined */}
-      <WavePlayerNavbar
+      {/* Desktop Sidebar (hidden on mobile) */}
+      <DesktopSidebar
+        active={page}
+        onNavigate={(p, param) => navigate(p as Page, param)}
+        favCount={favs.length}
+      />
+
+      {/* Main Content Column */}
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden relative">
+        {/* App Top Bar */}
+        <AppHeader
           query={query}
-          onQueryChange={(v) => { setQuery(v); if (v.trim().length >= 1) setShowSug(true); else setShowSug(false); }}
+          onQueryChange={(v) => {
+            setQuery(v);
+            if (v.trim().length >= 1) setShowSug(true);
+            else setShowSug(false);
+          }}
           onSearch={handleNavbarSearch}
           onNavigateSearch={handleNavbarSearch}
-          queueCount={queue.length}
-          onOpenQueue={() => setQueueOpen(true)}
           suggestions={showSug ? suggestions : []}
           onSelectSuggestion={handleSuggestionSelect}
           onFocusSuggestions={() => {
@@ -381,16 +347,15 @@ function AppContent() {
           }}
           isFullscreen={isAppFs}
           onToggleFullscreen={toggleFs}
-          onNavigate={(p) => navigate(p as Page)}
+          onNavigate={(p, param) => navigate(p as Page, param)}
           canGoBack={canGoBack}
           onBack={goBack}
           active={page}
-          onActive={(s) => navigate(s as Page)}
-          favCount={favs.length}
         />
 
+        {/* Scrollable Main Area */}
         <main className="flex-1 min-w-0 overflow-y-auto scrollbar-thin scroll-smooth overflow-x-clip">
-          <div className="w-full max-w-[1200px] mx-auto px-3 min-[400px]:px-4 sm:px-6 lg:px-8 pt-[100px] sm:pt-[120px] space-y-5 sm:space-y-6 pb-[calc(228px+env(safe-area-inset-bottom))] sm:pb-[calc(240px+env(safe-area-inset-bottom))] lg:pb-[120px]">
+          <div className="w-full max-w-7xl mx-auto px-3.5 min-[400px]:px-4 sm:px-6 lg:px-8 pt-3 sm:pt-6 pb-[calc(148px+env(safe-area-inset-bottom))] lg:pb-[110px]">
             <AnimatePresence mode="wait">
               <motion.div
                 key={page}
@@ -408,7 +373,9 @@ function AppContent() {
             </AnimatePresence>
           </div>
         </main>
+      </div>
 
+      {/* Settings Modal */}
       <AnimatePresence>
         {settingsOpen && (
           <>
@@ -416,34 +383,28 @@ function AppContent() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[45] bg-black/60"
-              style={
-                glassEnabled
-                  ? {
-                      backdropFilter: `blur(${Math.round(8 + (glassIntensity / 100) * 12)}px)`,
-                      WebkitBackdropFilter: `blur(${Math.round(8 + (glassIntensity / 100) * 12)}px)`,
-                    }
-                  : {}
-              }
+              className="fixed inset-0 z-[45] bg-black/70 backdrop-blur-md"
               onClick={() => setSettingsOpen(false)}
             />
-            <motion.div initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 12 }} transition={{ type: 'spring', stiffness: 320, damping: 26 }} className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+              className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4"
+            >
               <div
-                className="relative w-full max-w-[640px] max-h-[85vh] overflow-hidden rounded-2xl border border-white/10 glass-panel flex flex-col"
-                style={
-                  glassEnabled
-                    ? {
-                        backgroundColor: `rgba(18,18,18,${(0.55 + (glassIntensity / 100) * 0.25).toFixed(2)})`,
-                        backdropFilter: `blur(${Math.round((glassIntensity / 100) * 24)}px) saturate(180%) brightness(1.08)`,
-                        WebkitBackdropFilter: `blur(${Math.round((glassIntensity / 100) * 24)}px) saturate(180%) brightness(1.08)`,
-                      }
-                    : { backgroundColor: '#0f0f0f' }
-                }
+                className="relative w-full max-w-[640px] max-h-[88vh] overflow-hidden rounded-3xl border border-white/10 bg-[#121215] shadow-2xl flex flex-col"
               >
-                <button onClick={() => setSettingsOpen(false)} className="absolute top-3 right-3 h-8 w-8 rounded-full bg-white/10 hover:bg-white text-white hover:text-black flex items-center justify-center z-10 border border-white/10">
+                <button
+                  onClick={() => setSettingsOpen(false)}
+                  className="touch-target absolute top-3.5 right-3.5 h-9 w-9 rounded-full bg-white/10 hover:bg-white text-white hover:text-black flex items-center justify-center z-10 border border-white/10 transition-colors"
+                  title="Close"
+                  aria-label="Close settings"
+                >
                   <X className="h-4 w-4" />
                 </button>
-                <div className="flex-1 overflow-y-auto p-6 scrollbar-none">
+                <div className="flex-1 overflow-y-auto p-5 sm:p-6 scrollbar-thin">
                   <SettingsPage />
                 </div>
               </div>
@@ -452,6 +413,7 @@ function AppContent() {
         )}
       </AnimatePresence>
 
+      {/* Profile Modal */}
       <AnimatePresence>
         {profilePopupOpen && (
           <>
@@ -459,34 +421,28 @@ function AppContent() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[45] bg-black/60"
-              style={
-                glassEnabled
-                  ? {
-                      backdropFilter: `blur(${Math.round(8 + (glassIntensity / 100) * 12)}px)`,
-                      WebkitBackdropFilter: `blur(${Math.round(8 + (glassIntensity / 100) * 12)}px)`,
-                    }
-                  : {}
-              }
+              className="fixed inset-0 z-[45] bg-black/70 backdrop-blur-md"
               onClick={() => setProfilePopupOpen(false)}
             />
-            <motion.div initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 12 }} transition={{ type: 'spring', stiffness: 320, damping: 26 }} className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+              className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4"
+            >
               <div
-                className="relative w-full max-w-[480px] max-h-[85vh] overflow-hidden rounded-2xl border border-white/10 glass-panel flex flex-col"
-                style={
-                  glassEnabled
-                    ? {
-                        backgroundColor: `rgba(18,18,18,${(0.55 + (glassIntensity / 100) * 0.25).toFixed(2)})`,
-                        backdropFilter: `blur(${Math.round((glassIntensity / 100) * 24)}px) saturate(180%) brightness(1.08)`,
-                        WebkitBackdropFilter: `blur(${Math.round((glassIntensity / 100) * 24)}px) saturate(180%) brightness(1.08)`,
-                      }
-                    : { backgroundColor: '#0f0f0f' }
-                }
+                className="relative w-full max-w-[480px] max-h-[88vh] overflow-hidden rounded-3xl border border-white/10 bg-[#121215] shadow-2xl flex flex-col"
               >
-                <button onClick={() => setProfilePopupOpen(false)} className="absolute top-3 right-3 h-8 w-8 rounded-full bg-white/10 hover:bg-white text-white hover:text-black flex items-center justify-center z-10 border border-white/10">
+                <button
+                  onClick={() => setProfilePopupOpen(false)}
+                  className="touch-target absolute top-3.5 right-3.5 h-9 w-9 rounded-full bg-white/10 hover:bg-white text-white hover:text-black flex items-center justify-center z-10 border border-white/10 transition-colors"
+                  title="Close"
+                  aria-label="Close profile"
+                >
                   <X className="h-4 w-4" />
                 </button>
-                <div className="flex-1 overflow-y-auto p-6 scrollbar-thin">
+                <div className="flex-1 overflow-y-auto p-5 sm:p-6 scrollbar-thin">
                   <ProfilePage />
                 </div>
               </div>
@@ -495,9 +451,26 @@ function AppContent() {
         )}
       </AnimatePresence>
 
-      <PlayerBar onOpenQueue={() => setQueueOpen(true)} onOpenNowPlaying={React.useCallback(() => navigate('nowplaying'), [navigate])} />
-      <BottomNavigation active={page} onChange={(p) => navigate(p as Page)} onPrefetch={(p) => prefetchPage(p)} />
-      <QueueDrawer open={queueOpen} queue={queue} currentIndex={currentIndex} onClose={() => setQueueOpen(false)} onPlayIndex={playIndex} onClear={() => { playerStore.clearQueue(); setQueueOpen(false); }} onRemove={removeFromQueue} onNavigate={(p, param) => navigate(p as Page, param)} />
+      {/* Persistent Player Chrome + Bottom Navigation */}
+      <PlayerBar
+        onOpenQueue={() => setQueueOpen(true)}
+        onOpenNowPlaying={useCallback(() => navigate('nowplaying'), [navigate])}
+      />
+      <BottomNavigation
+        active={page}
+        onChange={(p) => navigate(p as Page)}
+        onPrefetch={(p) => prefetchPage(p)}
+      />
+      <QueueDrawer
+        open={queueOpen}
+        queue={queue}
+        currentIndex={currentIndex}
+        onClose={() => setQueueOpen(false)}
+        onPlayIndex={playIndex}
+        onClear={() => { playerStore.clearQueue(); setQueueOpen(false); }}
+        onRemove={removeFromQueue}
+        onNavigate={(p, param) => navigate(p as Page, param)}
+      />
       <PwaChrome />
       <ToastViewport />
     </div>

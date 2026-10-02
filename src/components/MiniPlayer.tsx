@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Heart, Loader2, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { Track } from '../types';
 import { MarqueeText } from './MarqueeText';
+import { ArtworkImage } from './ArtworkImage';
 
 interface MiniPlayerProps {
   track: Track;
@@ -85,7 +86,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
           transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
           className={`relative h-11 w-11 sm:h-12 sm:w-12 overflow-hidden bg-[#1a1a1a] ring-1 shrink-0 shadow-[0_8px_24px_rgba(0,0,0,0.6)] rounded-[17px] ring-white/15`}
         >
-          <img src={track.thumbnail} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" decoding="async" draggable={false} />
+          <ArtworkImage src={track.thumbnail} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" decoding="async" draggable={false} />
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/[0.18] via-transparent to-transparent" />
         </motion.div>
 

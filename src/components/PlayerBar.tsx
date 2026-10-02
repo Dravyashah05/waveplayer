@@ -38,6 +38,7 @@ const LyricsView = lazy(() => import('./LyricsView').then((m) => ({ default: m.L
 const StatsPanel = lazy(() => import('./StatsPanel').then((m) => ({ default: m.StatsPanel })));
 const AlbumCanvas = lazy(() => import('./AlbumCanvas').then((m) => ({ default: m.AlbumCanvas })));
 import { MiniPlayer } from './MiniPlayer';
+import { ArtworkImage } from './ArtworkImage';
 import { playerStore } from '../services/playerStore';
 import { getActiveSession, subscribeRadio } from '../services/radioEngine';
 import { settingsStore } from '../services/settingsStore';
@@ -580,7 +581,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
                     transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
                     className={`relative rounded-[24px] sm:rounded-[28px] overflow-hidden shadow-[0_24px_64px_rgba(0,0,0,0.75),0_8px_20px_rgba(0,0,0,0.4)] ring-1 ring-white/15 bg-[#0f0f0f] shrink-0 ${showFsLyrics ? 'w-[clamp(140px,44vw,220px)] h-[clamp(140px,44vw,220px)] sm:w-[280px] sm:h-[280px] lg:w-[380px] lg:h-[380px]' : 'w-[clamp(180px,62vw,260px)] h-[clamp(180px,62vw,260px)] sm:w-[340px] sm:h-[340px] lg:w-[380px] lg:h-[380px]'}`}
                   >
-                    <img src={track.thumbnail} alt={track.title} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                    <ArtworkImage src={track.thumbnail} alt={track.title} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
                     {/* inner glass sheen */}
                     <div className="absolute inset-0 rounded-[28px] border border-white/10 pointer-events-none bg-gradient-to-br from-white/[0.07] via-transparent to-transparent" />
                     {/* playing ring */}

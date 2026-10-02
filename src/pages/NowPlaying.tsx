@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { ArtworkImage } from '../components/ArtworkImage';
 import { motion, useReducedMotion } from 'motion/react';
 import {
   ArrowLeft,
@@ -188,7 +189,7 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
         {/* Artwork + core controls */}
         <div>
           <div className="mx-auto aspect-square w-full max-w-[380px] overflow-hidden rounded-[24px] bg-[#161619] shadow-[0_24px_64px_rgba(0,0,0,0.6)] ring-1 ring-white/15">
-            <img
+            <ArtworkImage
               src={track.thumbnail}
               alt={`${track.title} artwork`}
               className="h-full w-full object-cover"

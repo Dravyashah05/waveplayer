@@ -13,7 +13,7 @@ describe('ytmusic auth probe', () => {
     assert.ok(seen.some((u) => u.includes('/api/ytmusic-py/auth/status')));
     assert.ok(!seen.some((u) => u.includes('/api/ytmusic/auth/status')));
     assert.equal(r.authenticated, true);
-    assert.equal(r.mode, 'ytmusic');
+    assert.equal(r.mode, 'connected');
   });
 
   it('degrades honestly when the service is down', async () => {
@@ -22,6 +22,6 @@ describe('ytmusic auth probe', () => {
     });
     const r = await checkYTMusicAuth();
     assert.equal(r.authenticated, false);
-    assert.equal(r.mode, 'anonymous');
+    assert.equal(r.mode, 'unavailable');
   });
 });

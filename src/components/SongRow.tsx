@@ -3,6 +3,7 @@ import { Play, Pause, Heart, MoreVertical, Clock3, Check, X } from 'lucide-react
 import { Track } from '../types';
 import { playerStore } from '../services/playerStore';
 import { formatTrackDuration } from '../services/libraryStore';
+import { ArtworkImage } from './ArtworkImage';
 
 interface SongRowProps {
   track: Track;
@@ -157,17 +158,12 @@ export const SongRow: React.FC<SongRowProps> = ({
       {/* 2. Cover Artwork */}
       {showCover && (
         <div className="relative h-11 w-11 sm:h-12 sm:w-12 shrink-0 overflow-hidden rounded-[10px] sm:rounded-[12px] bg-[#1a1a1c] ring-1 ring-white/[0.08] shadow-sm">
-          <img
+          <ArtworkImage
             src={track.thumbnail}
             alt={track.title}
             loading="lazy"
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
             referrerPolicy="no-referrer"
-            onError={(e) => {
-              const img = e.currentTarget as HTMLImageElement;
-              if (img.src.includes('maxresdefault')) img.src = img.src.replace('maxresdefault', 'hqdefault');
-              else if (img.src.includes('w800')) img.src = img.src.replace('w800', 'w400');
-            }}
           />
           <div className="absolute inset-0 hidden sm:flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
             <Play className="h-4 w-4 fill-white text-white" />

@@ -2,6 +2,18 @@ import { Track, Playlist, Album, SearchArtist, SearchFilter } from '../types';
 
 const YT_BASE = '/api/ytmusic';
 
+const STREAM_FAILURE_TTL_MS = 20_000;
+const streamInflight = new Map<string, Promise<ResolvedYouTubeAudio | null>>();
+const streamFailures = new Map<string, number>();
+function rememberStreamFailure(videoId: string): void {
+  for (const [id, retryAt] of streamFailures) if (retryAt <= Date.now()) streamFailures.delete(id);
+  if (streamFailures.size >= 200) {
+    const oldest = streamFailures.keys().next();
+    if (!oldest.done) streamFailures.delete(oldest.value);
+  }
+  streamFailures.set(videoId, Date.now() + STREAM_FAILURE_TTL_MS);
+}
+
 export interface ResolvedYouTubeAudio {
   videoId: string;
   streamUrl: string;
@@ -34,18 +46,39 @@ export function parseResolvedYouTubeAudio(value: unknown, expectedVideoId: strin
 
 export async function resolveYouTubeAudio(videoId: string): Promise<ResolvedYouTubeAudio | null> {
   if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return null;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8_000);
+  const now = Date.now();
+  const retryAt = streamFailures.get(videoId);
+  if (retryAt && retryAt > now) return null;
+  streamFailures.delete(videoId);
+  const existing = streamInflight.get(videoId);
+  if (existing) return existing;
+
+  const request = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+    try {
+      const response = await fetch(`${YT_BASE}/stream/${encodeURIComponent(videoId)}`, {
+        headers: { Accept: 'application/json' }, signal: controller.signal,
+      });
+      if (!response.ok) {
+        rememberStreamFailure(videoId);
+        return null;
+      }
+      const resolved = parseResolvedYouTubeAudio(await response.json(), videoId);
+      if (!resolved) rememberStreamFailure(videoId);
+      return resolved;
+    } catch {
+      rememberStreamFailure(videoId);
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  })();
+  streamInflight.set(videoId, request);
   try {
-    const response = await fetch(`${YT_BASE}/stream/${encodeURIComponent(videoId)}`, {
-      headers: { Accept: 'application/json' }, signal: controller.signal,
-    });
-    if (!response.ok) return null;
-    return parseResolvedYouTubeAudio(await response.json(), videoId);
-  } catch {
-    return null;
+    return await request;
   } finally {
-    clearTimeout(timeout);
+    if (streamInflight.get(videoId) === request) streamInflight.delete(videoId);
   }
 }
 
@@ -302,7 +335,7 @@ export function parseLRC(lrc: string): SyncedLine[] {
   return result.sort((a, b) => a.time - b.time);
 }
 
-export async function searchLrcLib(
+async function searchLrcLibUncached(
   trackTitle: string,
   artistName: string,
   durationSec?: number
@@ -391,6 +424,35 @@ export async function searchLrcLib(
   return null;
 }
 
+const lyricsLookupCache = new Map<string, { until: number; value: Awaited<ReturnType<typeof searchLrcLibUncached>> }>();
+const lyricsLookupInflight = new Map<string, Promise<Awaited<ReturnType<typeof searchLrcLibUncached>>>>();
+
+export async function searchLrcLib(
+  trackTitle: string,
+  artistName: string,
+  durationSec?: number,
+): Promise<Awaited<ReturnType<typeof searchLrcLibUncached>>> {
+  const key = `${trackTitle.trim().toLowerCase()}|${artistName.trim().toLowerCase()}|${Math.round(durationSec || 0)}`;
+  const cached = lyricsLookupCache.get(key);
+  if (cached && cached.until > Date.now()) return cached.value;
+  if (cached) lyricsLookupCache.delete(key);
+  const pending = lyricsLookupInflight.get(key);
+  if (pending) return pending;
+  const request = searchLrcLibUncached(trackTitle, artistName, durationSec);
+  lyricsLookupInflight.set(key, request);
+  try {
+    const value = await request;
+    if (lyricsLookupCache.size >= 200) {
+      const oldest = lyricsLookupCache.keys().next();
+      if (!oldest.done) lyricsLookupCache.delete(oldest.value);
+    }
+    lyricsLookupCache.set(key, { until: Date.now() + 60_000, value });
+    return value;
+  } finally {
+    if (lyricsLookupInflight.get(key) === request) lyricsLookupInflight.delete(key);
+  }
+}
+
 export async function getLyrics(videoId: string): Promise<LyricsData | null> {
   if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return null;
   try {
@@ -418,7 +480,9 @@ export async function getLyrics(videoId: string): Promise<LyricsData | null> {
 // --- Playlist write: real YTMusic via Python backend (ytmusicapi) with local mock fallback ---
 const YT_WRITE_BASE = '/api/ytmusic'; // proxied to Python :3000 for /playlist & /auth, Node :8001 for others
 
-export async function checkYTMusicAuth(): Promise<{ authenticated: boolean; authFile: string | null; mode: string }> {
+export type YTMusicAuthMode = 'connected' | 'disconnected' | 'unavailable';
+
+export async function checkYTMusicAuth(): Promise<{ authenticated: boolean; authFile: string | null; mode: YTMusicAuthMode }> {
   // Legacy `/api/ytmusic/auth/*` never existed server-side (was a 404).
   // Query the real gateway status with a bound; anything else is anonymous.
   try {
@@ -430,11 +494,11 @@ export async function checkYTMusicAuth(): Promise<{ authenticated: boolean; auth
     } finally {
       clearTimeout(timer);
     }
-    if (!res.ok) return { authenticated: false, authFile: null, mode: 'anonymous' };
+    if (!res.ok) return { authenticated: false, authFile: null, mode: 'unavailable' };
     const data: any = await res.json().catch(() => ({}));
     const authenticated = !!data?.authenticated;
-    return { authenticated, authFile: null, mode: authenticated ? 'ytmusic' : 'anonymous' };
-  } catch { return { authenticated: false, authFile: null, mode: 'anonymous' }; }
+    return { authenticated, authFile: null, mode: authenticated ? 'connected' : 'disconnected' };
+  } catch { return { authenticated: false, authFile: null, mode: 'unavailable' }; }
 }
 
 export async function createYTMusicPlaylist(title: string, description = '', privacyStatus: 'PRIVATE' | 'PUBLIC' | 'UNLISTED' = 'PRIVATE'): Promise<{ playlistId: string; mock?: boolean }> {

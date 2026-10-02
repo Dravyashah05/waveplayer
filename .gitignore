@@ -148,3 +148,6 @@ oauth.json
 jiosaavn-api/
 dist-test/
 
+
+.vercel
+.env*

@@ -22,17 +22,23 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'wave-player
 
 let ytmusic: YTMusic | null = null;
 let initPromise: Promise<void> | null = null;
+let initRetryAfter = 0;
+const INIT_FAILURE_BACKOFF_MS = 20_000;
+const streamResolutionInflight = new Map<string, Promise<Awaited<ReturnType<typeof resolveYouTubeAudio>>>>();
 
 async function getYTMusic(): Promise<YTMusic> {
   if (ytmusic) return ytmusic;
   if (initPromise) await initPromise;
   if (ytmusic) return ytmusic;
+  if (Date.now() < initRetryAfter) throw Object.assign(new Error('YTMUSIC_INIT_TEMPORARILY_UNAVAILABLE'), { code: 'YTMUSIC_INIT_BACKOFF' });
   const instance = new YTMusic();
   initPromise = instance.initialize().then(() => {
     ytmusic = instance;
+    initRetryAfter = 0;
     console.log('[YTMusic] initialized');
   }).catch(err => {
-    console.error('[YTMusic] init failed', err);
+    console.error('[YTMusic] init failed', shortError(err));
+    initRetryAfter = Date.now() + INIT_FAILURE_BACKOFF_MS;
     initPromise = null;
     throw err;
   });
@@ -364,12 +370,47 @@ app.get('/api/ytmusic/stream/:videoId', async (req, res) => {
   if (!YOUTUBE_VIDEO_ID.test(videoId)) {
     return res.status(400).json({ success: false, error: 'INVALID_VIDEO_ID' });
   }
+  const startedAt = Date.now();
+  let stage = 'ytmusic_init';
   try {
-    const yt = await getYTMusic();
-    const result = await resolveYouTubeAudio(videoId, (id) => yt.getSong(id));
-    if (!result) return res.status(404).json({ success: false, error: 'AUDIO_STREAM_NOT_AVAILABLE' });
+    let pending = streamResolutionInflight.get(videoId);
+    if (!pending) {
+      pending = (async () => {
+        const yt = await getYTMusic();
+        stage = 'get_song';
+        const song = await yt.getSong(videoId);
+        stage = 'format_selection';
+        return resolveYouTubeAudio(videoId, async () => song);
+      })();
+      streamResolutionInflight.set(videoId, pending);
+      pending.then(
+        () => { if (streamResolutionInflight.get(videoId) === pending) streamResolutionInflight.delete(videoId); },
+        () => { if (streamResolutionInflight.get(videoId) === pending) streamResolutionInflight.delete(videoId); },
+      );
+    }
+    const result = await pending;
+    if (!result) {
+      console.warn('[stream]', JSON.stringify({ videoId, resolver: 'ytmusic-api', category: 'SOURCE_NOT_FOUND', durationMs: Date.now() - startedAt, status: 404 }));
+      return res.status(404).json({ success: false, error: 'AUDIO_STREAM_NOT_AVAILABLE' });
+    }
+    console.info('[stream]', JSON.stringify({ videoId, resolver: 'ytmusic-api', category: 'resolved', durationMs: Date.now() - startedAt, status: 200 }));
     return res.json({ success: true, ...result });
-  } catch {
+  } catch (error: any) {
+    const invalidUpstreamVideo = error?.message === 'Invalid videoId';
+    const category = invalidUpstreamVideo ? 'SOURCE_NOT_FOUND'
+      : error?.name === 'AbortError' || error?.code === 'ETIMEDOUT' ? 'SOURCE_TIMEOUT'
+      : error?.code === 'ENOTFOUND' || error?.code === 'EAI_AGAIN' || error?.code === 'EACCES' ? 'NETWORK_ERROR'
+        : 'SOURCE_UNAVAILABLE';
+    const safeToken = (value: unknown) => typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(value) ? value : undefined;
+    const upstreamStatus = Number(error?.response?.status);
+    console.error('[stream]', JSON.stringify({
+      videoId, resolver: 'ytmusic-api', category, stage,
+      errorName: safeToken(error?.name), errorCode: safeToken(error?.code),
+      reason: invalidUpstreamVideo ? 'INVALID_UPSTREAM_VIDEO_ID' : error?.isAxiosError ? 'UPSTREAM_REQUEST_FAILED' : undefined,
+      upstreamStatus: Number.isInteger(upstreamStatus) && upstreamStatus >= 100 && upstreamStatus <= 599 ? upstreamStatus : undefined,
+      durationMs: Date.now() - startedAt, status: invalidUpstreamVideo ? 404 : 503,
+    }));
+    if (invalidUpstreamVideo) return res.status(404).json({ success: false, error: 'AUDIO_STREAM_NOT_AVAILABLE' });
     return res.status(503).json({ success: false, error: 'STREAM_RESOLUTION_FAILED' });
   }
 });

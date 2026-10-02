@@ -289,7 +289,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
   useEffect(() => {
     checkYTMusicAuth()
       .then((r) => setAuthMode(r.mode))
-      .catch(() => setAuthMode('mock'));
+      .catch(() => setAuthMode('unavailable'));
   }, []);
 
   // Save sort option
@@ -1237,7 +1237,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                     <Sparkles className="h-4 w-4 text-amber-400" /> Create Playlist
                   </h3>
                   <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-mono text-white/60">
-                    {authMode}
+                    {authMode === 'unavailable' ? 'YouTube Music is temporarily unavailable.' : authMode}
                   </span>
                 </div>
                 <div className="mt-3 grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2">

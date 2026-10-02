@@ -28,17 +28,20 @@ import {
   Clock3,
   Activity,
 } from 'lucide-react';
+import { Suspense, lazy } from 'react';
 import { Track } from '../types';
 import { SyncedLine, getLyrics, searchLrcLib } from '../services/ytmusicApi';
 import { getSaavnLyrics } from '../services/saavnApi';
-import { LyricsView } from './LyricsView';
+// Fullscreen-only surfaces split out of the initial chunk; the dock and
+// transport stay eager. Fallbacks are inline spinners (never layout shifts).
+const LyricsView = lazy(() => import('./LyricsView').then((m) => ({ default: m.LyricsView })));
+const StatsPanel = lazy(() => import('./StatsPanel').then((m) => ({ default: m.StatsPanel })));
+const AlbumCanvas = lazy(() => import('./AlbumCanvas').then((m) => ({ default: m.AlbumCanvas })));
 import { MiniPlayer } from './MiniPlayer';
 import { playerStore } from '../services/playerStore';
 import { getActiveSession, subscribeRadio } from '../services/radioEngine';
 import { settingsStore } from '../services/settingsStore';
 import { playerEngine, usePlayerEngine } from '../services/playerEngine';
-import { StatsPanel } from './StatsPanel';
-import { AlbumCanvas } from './AlbumCanvas';
 import { toast } from './Toast';
 import {
   canDownloadOffline,
@@ -416,7 +419,9 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
           >
             {/* Background — flat void with fade gradients */}
             <div className="absolute inset-0 overflow-hidden">
-              <AlbumCanvas artwork={track.thumbnail} title={track.title} />
+              <Suspense fallback={null}>
+                <AlbumCanvas artwork={track.thumbnail} title={track.title} />
+              </Suspense>
               <div className="absolute inset-0 bg-black/55" />
               <div
                 className="absolute inset-0"
@@ -605,6 +610,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
                   {/* Content — lyrics only */}
                   <div className="flex-1 min-h-0 overflow-hidden">
                     <div className="h-full overflow-hidden">
+                      <Suspense fallback={<div className="grid h-full place-items-center"><Loader2 className="h-5 w-5 animate-spin text-white/40" /></div>}>
                       <LyricsView
                         synced={syncedLyrics}
                         plain={plainLyrics}
@@ -619,6 +625,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
                         artist={track.author}
                         trackId={track.id}
                       />
+                      </Suspense>
                     </div>
                   </div>
                 </div>
@@ -757,7 +764,9 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
         )}
       </AnimatePresence>
 
-      <StatsPanel isOpen={statsOpen} onClose={() => setStatsOpen(false)} track={track} />
+      <Suspense fallback={null}>
+        <StatsPanel isOpen={statsOpen} onClose={() => setStatsOpen(false)} track={track} />
+      </Suspense>
     </>
   );
 };

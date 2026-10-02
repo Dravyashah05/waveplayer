@@ -5,10 +5,14 @@ import { resolveYouTubeAudio, YOUTUBE_VIDEO_ID } from './youtubeStream.js';
 import { registerYoutubeRoutes } from './googleYouTube.js';
 import { registerYTMusicPyRoutes } from './services/ytmusicPython.js';
 import { registerRecommendationRoutes } from './recommendation/index.js';
+import { LIMITS, rateLimit } from './rateLimit.js';
 import { pathToFileURL } from 'node:url';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+// Search bursts are the most abuse-prone read path; playback-critical
+// streams and the player state API are intentionally unthrottled.
+app.use('/api/ytmusic/search', rateLimit(LIMITS.search));
 registerYoutubeRoutes(app);
 // Python ytmusicapi gateway (separate service, user-isolated). Existing
 // /api/ytmusic/* routes below are untouched by this integration.
@@ -188,7 +192,7 @@ app.get('/api/ytmusic/health', async (_req, res) => {
 
 // Unified search with filter support
 app.get('/api/ytmusic/search', async (req, res) => {
-  const q = String(req.query.q || '').trim();
+  const q = String(req.query.q || '').trim().slice(0, 200);
   const filter = String(req.query.filter || 'all').toLowerCase();
   if (!q) return res.status(400).json({ error: 'missing q' });
   try {
@@ -480,3 +484,4 @@ if (entry && import.meta.url === entry) {
     getYTMusic().catch(e => console.error('Eager init failed', shortError(e)));
   });
 }
+

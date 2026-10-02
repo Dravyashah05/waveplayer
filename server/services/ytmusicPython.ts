@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import { getWaveUserKey } from '../googleYouTube.js';
+import { LIMITS, rateLimit } from '../rateLimit.js';
 
 /**
  * Express gateway for the Python ytmusicapi service (sigma67/ytmusicapi).
@@ -171,6 +172,9 @@ export function registerYTMusicPyRoutes(app: Express): void {
     // Gateway is healthy even when Python is down — the player degrades.
     res.json({ ok: true, gateway: 'ytmusic-py', python: health.ok ? health.py : null, pythonAvailable: health.ok });
   });
+
+  // Gateway fan-out (sync hits six of these at once) stays well under budget.
+  app.use('/api/ytmusic-py/library', rateLimit(LIMITS.gateway));
 
   const proxy = (pyPath: string, cacheable = true) => async (req: Request, res: Response) => {
     try {

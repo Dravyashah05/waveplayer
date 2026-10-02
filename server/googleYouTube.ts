@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Express, Request, Response } from 'express';
+import { LIMITS, rateLimit } from './rateLimit.js';
 
 type GoogleUser = { id: string; email: string; name: string; picture?: string };
 type Credentials = { accessToken: string; refreshToken?: string; expiresAt: number; scopes: string[] };
@@ -24,15 +25,29 @@ function env(name: string): string | undefined {
   return t;
 }
 
+/** True only when production can persist sessions across instances. */
+export function sessionStoreMode(): 'redis' | 'memory' {
+  return process.env.NODE_ENV === 'production' && !!env('UPSTASH_REDIS_REST_URL') && !!env('UPSTASH_REDIS_REST_TOKEN')
+    ? 'redis'
+    : 'memory';
+}
+
 async function redisCommand<T>(...command: string[]): Promise<T> {
   const endpoint = env('UPSTASH_REDIS_REST_URL');
   const token = env('UPSTASH_REDIS_REST_TOKEN');
   if (!endpoint || !token) throw new Error('SESSION_STORE_NOT_CONFIGURED');
-  const response = await fetch(endpoint, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(command) });
-  if (!response.ok) throw new Error('SESSION_STORE_UNAVAILABLE');
-  const result: any = await response.json();
-  if (result.error) throw new Error('SESSION_STORE_UNAVAILABLE');
-  return result.result as T;
+  // Bounded: Upstash REST is fast; never hang a serverless invocation on it.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(endpoint, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(command), signal: controller.signal });
+    if (!response.ok) throw new Error('SESSION_STORE_UNAVAILABLE');
+    const result: any = await response.json();
+    if (result.error) throw new Error('SESSION_STORE_UNAVAILABLE');
+    return result.result as T;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 function clearUserCache(userId?: string) {
   if (!userId) return;
@@ -153,6 +168,23 @@ async function saveSession(req: Request): Promise<void> {
     else sessions.set(record.id, record.value);
   } catch { /* session persist is best-effort; auth reads degrade gracefully */ }
 }
+
+/**
+ * Persist any in-request session mutation when the response finishes.
+ * Token refreshes mutate credentials in place deep inside ytApi() with no
+ * explicit save call — without this hook, refreshed tokens are lost when
+ * the next request lands on a different serverless instance (silent logout
+ * loop). Hooked once per auth-path request in the middleware below; explicit
+ * saveSession() calls elsewhere stay valid (idempotent overwrite).
+ */
+function persistOnFinish(req: Request, res: Response): void {
+  let done = false;
+  res.on('finish', () => {
+    if (done) return;
+    done = true;
+    void saveSession(req).catch(() => {});
+  });
+}
 function playlist(item: any) {
   const s = item.snippet || {}; const d = item.contentDetails || {}; const status = item.status?.privacyStatus || 'private';
   return { id: item.id, title: s.title || '', description: s.description || '', thumbnail: s.thumbnails?.maxres?.url || s.thumbnails?.high?.url || s.thumbnails?.default?.url || '', channelTitle: s.channelTitle || '', itemCount: d.itemCount ?? 0, privacy: status, source: 'youtube', youtubePlaylistId: item.id };
@@ -167,6 +199,12 @@ function playlistItem(i: any) {
   return { id: i.id, videoId: d.videoId || null, title: s.title || '', artist: channelTitle, channelTitle, thumbnail: s.thumbnails?.high?.url || s.thumbnails?.medium?.url || s.thumbnails?.default?.url || '', position: s.position ?? 0, publishedAt: s.publishedAt || null, status: i.status?.privacyStatus || 'private', duration: null };
 }
 function registerYoutubeRoutes(app: Express) {
+  // Abuse-sensitive entry points share one limiter each. Mounted (not inline)
+  // so route `:params` keep inferring as `string` under Express 5 types, and
+  // registered before any route so they always run first.
+  app.use('/api/auth/google', rateLimit(LIMITS.auth));
+  app.use('/api/auth/youtube/connect', rateLimit(LIMITS.auth));
+  app.use('/api/youtube/playlists', rateLimit(LIMITS.mutations));
   app.use(async (req, res, next) => {
     if (!req.path.startsWith('/api/auth/') && !req.path.startsWith('/api/youtube/') && !req.path.startsWith('/api/ytmusic-py/')) return next();
     const raw = req.headers.cookie?.split(';').map(v => v.trim()).find(v => v.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
@@ -185,9 +223,13 @@ function registerYoutubeRoutes(app: Express) {
       // /api/auth/me returns { connected: false } instead of 503 noise.
       session = sessions.get(id) || {};
     }
-    sessions.set(id, session);
+    // In Redis mode the memory Map is NOT written here: it would grow
+    // unboundedly in long-lived instances and diverge across them. Redis is
+    // the source of truth; memory is only the non-production store.
+    if (sessionStoreMode() === 'memory') sessions.set(id, session);
     const record = { id, value: session } as RequestSession;
     requestSessions.set(req, record);
+    persistOnFinish(req, res);
     if (!raw || !/^[a-f0-9]{64}$/.test(raw)) res.setHeader('Set-Cookie', `${COOKIE}=${id}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
     next();
   });
@@ -234,6 +276,12 @@ function registerYoutubeRoutes(app: Express) {
     res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`); res.json({ ok: true });
   });
   app.get('/api/auth/youtube/status', (req, res) => { const s = sessionFor(req, res); res.json({ connected: !!s.youtube, scopes: s.youtube?.scopes || [] }); });
+  // Non-sensitive deployment diagnostic: which session store is active.
+  // Never exposes URLs, tokens, secrets or session contents.
+  app.get('/api/auth/session/health', (_req, res) => {
+    const store = sessionStoreMode();
+    res.json({ store, persistent: store === 'redis' });
+  });
   app.get('/api/auth/youtube/connect', async (req, res) => { const s = sessionFor(req, res); if (!s.user) return res.status(401).json({ error: 'GOOGLE_NOT_CONNECTED' }); await startOAuth(req, s, 'youtube', res, wantsManage(req)); });
   app.post('/api/auth/youtube/disconnect', async (req, res) => { const s = sessionFor(req, res); clearUserCache(s.user?.id); s.youtube = undefined; await saveSession(req); res.json({ ok: true }); });
 
@@ -284,3 +332,4 @@ export function getWaveUserKey(req: Request): string | null {
   if (typeof googleId === 'string' && googleId) return `google:${googleId}`;
   return `anon:${record.id}`;
 }
+

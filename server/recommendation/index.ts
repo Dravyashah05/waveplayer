@@ -5,6 +5,7 @@
 // bare 500, and never the whole API.
 
 import type { Express, Request, Response } from 'express';
+import { LIMITS, rateLimit } from '../rateLimit.js';
 import type { YTMusicLike } from './candidates.js';
 import { artistCandidates, homeSectionCandidates, searchCandidates, toCandidate, trendingCandidates } from './candidates.js';
 import { buildAutoplay, buildRadio, buildSimilar, toResolvedTrack } from './autoplay.js';
@@ -40,7 +41,8 @@ function timed<T>(work: Promise<T>, ms: number): Promise<T | null> {
 }
 
 function tasteOf(req: Request) {
-  const csv = (v: unknown) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10);
+  // Bounded tokens: huge query strings can't bloat cache keys or ranking.
+  const csv = (v: unknown) => String(v || '').slice(0, 500).split(',').map((s) => s.trim().slice(0, 64)).filter(Boolean).slice(0, 10);
   return {
     artists: csv(req.query.artists),
     languages: csv(req.query.lang || req.query.language),
@@ -57,6 +59,8 @@ function shortError(e: any): string {
 }
 
 export function registerRecommendationRoutes(app: Express, getYt: () => Promise<YTMusicLike>) {
+  // Generous: normal browsing/radio/autoplay never notices; bursts do.
+  app.use('/api/recommendations', rateLimit(LIMITS.recommendations));
   async function yt(): Promise<YTMusicLike | null> {
     try {
       return await getYt();

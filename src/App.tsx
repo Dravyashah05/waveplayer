@@ -9,10 +9,11 @@ import { PwaChrome } from './components/PwaChrome';
 import { RouteBoundary } from './components/RouteBoundary';
 import { BottomNavigation } from './components/BottomNavigation';
 import { perfMark, perfMeasure } from './services/perf';
-// Critical shell stays eager (Home/Search + player chrome). Secondary pages
-// split into lazy chunks so first paint never waits for them.
+// Critical shell stays eager (Home + player chrome). Search and all secondary
+// pages split into lazy chunks so first paint never waits for them; the navbar
+// prefetches Search on focus so opening it still feels instant.
 import { HomePage } from './pages/Home';
-import { SearchPage } from './pages/Search';
+const SearchPage = lazy(() => import('./pages/Search').then((m) => ({ default: m.SearchPage })));
 const LibraryPage = lazy(() => import('./pages/Library').then((m) => ({ default: m.LibraryPage })));
 const ArtistPage = lazy(() => import('./pages/Artist').then((m) => ({ default: m.ArtistPage })));
 const AlbumPage = lazy(() => import('./pages/Album').then((m) => ({ default: m.AlbumPage })));
@@ -41,6 +42,7 @@ interface NavState {
 }
 
 const pageLoaders: Record<string, () => Promise<unknown>> = {
+  search: () => import('./pages/Search'),
   explore: () => import('./pages/Explore'),
   playlists: () => import('./pages/Library'),
   artist: () => import('./pages/Artist'),
@@ -373,7 +375,10 @@ function AppContent() {
           onOpenQueue={() => setQueueOpen(true)}
           suggestions={showSug ? suggestions : []}
           onSelectSuggestion={handleSuggestionSelect}
-          onFocusSuggestions={() => query.trim() && setShowSug(true)}
+          onFocusSuggestions={() => {
+            prefetchPage('search');
+            if (query.trim()) setShowSug(true);
+          }}
           isFullscreen={isAppFs}
           onToggleFullscreen={toggleFs}
           onNavigate={(p) => navigate(p as Page)}

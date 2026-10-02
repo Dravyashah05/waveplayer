@@ -19,7 +19,14 @@ const LS_SKIP = 'wave:skip_counts';
 const LS_PLAY_COUNT = 'wave:play_counts';
 
 function load<T>(k: string, fallback: T): T {
-  try { const v = localStorage.getItem(k); return v ? JSON.parse(v) as T : fallback; } catch { return fallback; }
+  try {
+    const v = localStorage.getItem(k);
+    if (!v) return fallback;
+    const parsed = JSON.parse(v) as unknown;
+    if (Array.isArray(fallback) && !Array.isArray(parsed)) return fallback;
+    if (!Array.isArray(fallback) && typeof fallback === 'object' && fallback !== null && (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))) return fallback;
+    return parsed as T;
+  } catch { return fallback; }
 }
 function save(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 
@@ -28,7 +35,8 @@ let eventsCache: ListeningEvent[] | null = null;
 
 function getEvents(): ListeningEvent[] {
   if (eventsCache) return eventsCache;
-  eventsCache = load<ListeningEvent[]>(LS_EVENTS, []);
+  const loaded = load<ListeningEvent[]>(LS_EVENTS, []);
+  eventsCache = Array.isArray(loaded) ? loaded : [];
   return eventsCache;
 }
 function setEvents(ev: ListeningEvent[]) {
@@ -56,19 +64,22 @@ export function logEvent(partial: Omit<ListeningEvent, 'timestamp' | 'completion
   // side indexes
   if (ev.event === 'skip') {
     const m = load<Record<string, number>>(LS_SKIP, {});
-    m[ev.songId] = (m[ev.songId] || 0) + 1;
-    save(LS_SKIP, m);
+    const safe: Record<string, number> = (m && typeof m === 'object' && !Array.isArray(m)) ? m : {};
+    safe[ev.songId] = (safe[ev.songId] || 0) + 1;
+    save(LS_SKIP, safe);
   }
   if (ev.event === 'play' || ev.event === 'complete' || ev.event === 'replay') {
     const m = load<Record<string, number>>(LS_PLAY_COUNT, {});
-    m[ev.songId] = (m[ev.songId] || 0) + (ev.event === 'replay' ? 2 : 1);
-    save(LS_PLAY_COUNT, m);
+    const safe: Record<string, number> = (m && typeof m === 'object' && !Array.isArray(m)) ? m : {};
+    safe[ev.songId] = (safe[ev.songId] || 0) + (ev.event === 'replay' ? 2 : 1);
+    save(LS_PLAY_COUNT, safe);
   }
   if (ev.event === 'play' || ev.event === 'complete' || ev.event === 'replay') {
     const recent = load<Track[]>(LS_RECENT, []);
+    const list = Array.isArray(recent) ? recent : [];
     const t = ev.track;
     if (t) {
-      const filtered = recent.filter(x => x.id !== t.id);
+      const filtered = list.filter(x => x && x.id !== t.id);
       filtered.unshift(t);
       save(LS_RECENT, filtered.slice(0, 50));
     }
@@ -78,15 +89,18 @@ export function logEvent(partial: Omit<ListeningEvent, 'timestamp' | 'completion
 }
 
 export function getRecentlyPlayed(limit = 20): Track[] {
-  return load<Track[]>(LS_RECENT, []).slice(0, limit);
+  const list = load<Track[]>(LS_RECENT, []);
+  return (Array.isArray(list) ? list : []).slice(0, limit);
 }
 
 export function getSkipCount(songId: string): number {
-  return load<Record<string, number>>(LS_SKIP, {})[songId] || 0;
+  const m = load<Record<string, number>>(LS_SKIP, {});
+  return (m && typeof m === 'object' && !Array.isArray(m) ? m : {})[songId] || 0;
 }
 
 export function getPlayCount(songId: string): number {
-  return load<Record<string, number>>(LS_PLAY_COUNT, {})[songId] || 0;
+  const m = load<Record<string, number>>(LS_PLAY_COUNT, {});
+  return (m && typeof m === 'object' && !Array.isArray(m) ? m : {})[songId] || 0;
 }
 
 export function getEventsForSong(songId: string): ListeningEvent[] {

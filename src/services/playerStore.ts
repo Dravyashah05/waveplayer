@@ -16,21 +16,43 @@ const LS_VOLUME = 'wave:volume';
 function load<T>(key: string, fallback: T): T {
   try {
     const v = localStorage.getItem(key);
-    return v ? (JSON.parse(v) as T) : fallback;
+    if (!v) return fallback;
+    const parsed = JSON.parse(v) as unknown;
+    // Corrupt or foreign values must never propagate — fall back instead of
+    // crashing the store constructor (which runs at import time and would
+    // white-screen the whole app).
+    if (Array.isArray(fallback) && !Array.isArray(parsed)) return fallback;
+    if (typeof fallback === 'number' && (typeof parsed !== 'number' || !Number.isFinite(parsed))) return fallback;
+    if (typeof fallback === 'boolean' && typeof parsed !== 'boolean') return fallback;
+    if (typeof fallback === 'string' && typeof parsed !== 'string') return fallback;
+    return parsed as T;
   } catch { return fallback; }
+}
+
+function isTrackLike(t: unknown): t is Track {
+  return !!t && typeof t === 'object' && typeof (t as Track).id === 'string' && !!(t as Track).id;
+}
+
+function loadTracks(key: string): Track[] {
+  const arr = load<unknown[]>(key, []);
+  if (!Array.isArray(arr)) return [];
+  return arr.filter(isTrackLike);
 }
 function save(key: string, v: unknown) {
   try { localStorage.setItem(key, JSON.stringify(v)); } catch {}
 }
 
 class PlayerStore {
-  private tracks: Track[] = load<Track[]>(LS_QUEUE, []);
+  private tracks: Track[] = loadTracks(LS_QUEUE);
   private index = load<number>(LS_INDEX, -1);
-  private favs: Track[] = load<Track[]>(LS_FAV, []);
-  private history: Track[] = load<Track[]>(LS_HISTORY, []);
+  private favs: Track[] = loadTracks(LS_FAV);
+  private history: Track[] = loadTracks(LS_HISTORY);
   private _shuffle = load<boolean>(LS_SHUFFLE, false);
-  private _repeat: Repeat = load<Repeat>(LS_REPEAT, 'all');
-  private _volume = load<number>(LS_VOLUME, 80);
+  private _repeat: Repeat = (() => {
+    const r = load<string>(LS_REPEAT, 'all');
+    return r === 'off' || r === 'one' || r === 'all' ? r : 'all';
+  })();
+  private _volume = (() => { const v = load<number>(LS_VOLUME, 80); return v >= 0 && v <= 100 ? v : 80; })();
   private listeners = new Set<Listener>();
   private shuffleOrder: number[] = [];
   private shufflePtr = 0;
@@ -40,7 +62,13 @@ class PlayerStore {
   private bump() { this._revision++; }
 
   constructor() {
-    // sanitize index
+    // sanitize state — never trust persisted values (corrupt keys used to
+    // throw here at import time and white-screen the app).
+    if (!Array.isArray(this.tracks)) this.tracks = [];
+    else this.tracks = this.tracks.filter(isTrackLike);
+    if (!Array.isArray(this.favs)) this.favs = [];
+    if (!Array.isArray(this.history)) this.history = [];
+    if (typeof this.index !== 'number' || !Number.isFinite(this.index)) this.index = -1;
     if (this.index < 0 || this.index >= this.tracks.length) this.index = this.tracks.length ? 0 : -1;
     if (this.tracks.length && this.index === -1) this.index = 0;
   }

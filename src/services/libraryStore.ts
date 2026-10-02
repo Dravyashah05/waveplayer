@@ -97,11 +97,25 @@ export function formatTotalDuration(tracks: Track[]): string {
   return `${mins} min`;
 }
 
-/** Get all local playlists from localStorage */
+/** Get all local playlists from localStorage (never throws, never returns garbage) */
 export function getLocalPlaylists(): LocalPlaylist[] {
   try {
     const raw = localStorage.getItem(LS_LOCAL_PLAYLISTS);
-    return raw ? (JSON.parse(raw) as LocalPlaylist[]) : [];
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Drop malformed entries and non-track song payloads (e.g. mock
+    // YouTube-sync shells that store videoId strings in `songs`).
+    const clean: LocalPlaylist[] = [];
+    for (const p of parsed) {
+      if (!p || typeof p !== 'object' || typeof (p as LocalPlaylist).id !== 'string') continue;
+      const pl = p as LocalPlaylist;
+      const songs = Array.isArray(pl.songs)
+        ? pl.songs.filter((s): s is Track => !!s && typeof s === 'object' && typeof (s as Track).id === 'string')
+        : [];
+      clean.push({ ...pl, songs });
+    }
+    return clean;
   } catch {
     return [];
   }

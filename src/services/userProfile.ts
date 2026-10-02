@@ -33,7 +33,14 @@ function normalizeKey(s: string): string {
 }
 
 function loadJSON<T>(k: string, fallback: T): T {
-  try { const v = localStorage.getItem(k); return v ? JSON.parse(v) as T : fallback; } catch { return fallback; }
+  try {
+    const v = localStorage.getItem(k);
+    if (!v) return fallback;
+    const parsed = JSON.parse(v) as unknown;
+    if (Array.isArray(fallback) && !Array.isArray(parsed)) return fallback;
+    if (!Array.isArray(fallback) && typeof fallback === 'object' && fallback !== null && (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))) return fallback;
+    return parsed as T;
+  } catch { return fallback; }
 }
 
 function inferGenre(track: Track): string[] {

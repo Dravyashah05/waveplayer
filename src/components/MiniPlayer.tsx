@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { motion } from 'motion/react';
 import { Heart, Loader2, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
 import { Track } from '../types';
@@ -33,7 +34,12 @@ function fmt(s: number): string {
  * artwork → full-round controls). Tap anywhere opens fullscreen; transport
  * buttons stop propagation so they never trigger open.
  */
-export const MiniPlayer: React.FC<MiniPlayerProps> = ({
+/**
+ * Memoized: PlayerBar re-renders ~4Hz on engine progress ticks. Stable
+ * callbacks (see PlayerBar useCallbacks) keep this cheap — only track,
+ * transport state, progress and fav changes re-render the dock.
+ */
+export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
   track,
   isPlaying,
   isBuffering,
@@ -160,4 +166,6 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({
       </div>
     </motion.div>
   );
-};
+});
+
+MiniPlayer.displayName = 'MiniPlayer';

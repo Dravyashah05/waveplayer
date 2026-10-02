@@ -2,6 +2,7 @@ import type { Track } from '../types';
 import { matchSongs } from './recommendation/songMatcher';
 import { cleanTitle, musicIdentity } from './recommendation/metadataNormalizer';
 import { searchSaavnSongs } from './saavnApi';
+import { fetchResilient } from './resilientFetch';
 
 export interface YoutubeItem {
   id: string;
@@ -61,10 +62,17 @@ export function reauthMessage(): string {
 }
 
 async function fetchJson(path: string): Promise<any> {
-  const res = await fetch(path, { credentials: 'include' });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `Request failed: ${res.status}`);
-  return data;
+  // Bounded timeout via central policy (was: hung indefinitely on stall).
+  // Auth failures keep their legacy codes so isReauthError() still matches.
+  try {
+    const res = await fetchResilient(path, { policy: 'normal' });
+    return res.json().catch(() => ({}));
+  } catch (e: any) {
+    const code = e?.code;
+    if (code === 'AUTH_REQUIRED') throw new Error('YOUTUBE_NOT_CONNECTED');
+    if (code === 'FORBIDDEN') throw new Error('INSUFFICIENT_SCOPE');
+    throw e;
+  }
 }
 
 /** All playlists of the authenticated user, following YouTube pageTokens (bounded). */

@@ -118,7 +118,8 @@ export default async function handler(req: any, res: any) {
     } catch (e: any) {
       console.error('[api] express dispatch error:', String(e?.message || e).slice(0, 300));
       if (!res.headersSent) {
-        sendJson(res, 500, { error: 'INTERNAL_SERVER_ERROR', details: e?.message });
+        // Stable code only — never upstream messages, paths or internals.
+        sendJson(res, 500, { error: 'INTERNAL_SERVER_ERROR' });
       }
       onFinish();
     }

@@ -101,13 +101,20 @@ export const SongRow: React.FC<SongRowProps> = ({
               e.stopPropagation();
               onToggleSelect?.(!selected);
             }}
-            className={`flex h-4 w-4 sm:h-5 sm:w-5 items-center justify-center rounded-md border transition-all ${
-              selected
-                ? 'bg-white border-white text-black'
-                : 'border-white/30 bg-black/40 hover:border-white/60 text-transparent'
-            }`}
+            aria-label={selected ? 'Deselect song' : 'Select song'}
+            aria-pressed={selected}
+            className="flex min-h-[40px] min-w-[40px] items-center justify-center"
           >
-            <Check className="h-3 w-3 stroke-[3]" />
+            <span
+              aria-hidden="true"
+              className={`flex h-4 w-4 sm:h-5 sm:w-5 items-center justify-center rounded-md border transition-all ${
+                selected
+                  ? 'bg-white border-white text-black'
+                  : 'border-white/30 bg-black/40 hover:border-white/60 text-transparent'
+              }`}
+            >
+              <Check className="h-3 w-3 stroke-[3]" />
+            </span>
           </button>
         ) : (
           <>

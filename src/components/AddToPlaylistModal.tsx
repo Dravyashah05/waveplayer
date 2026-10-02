@@ -10,6 +10,13 @@ import {
   addTracksToPlaylist,
 } from '../services/libraryStore';
 import { logEvent } from '../services/listeningStore';
+import {
+  addVideoToYoutubePlaylist,
+  getYoutubeCapability,
+  isInsufficientScope,
+  listYoutubePlaylists,
+} from '../services/youtubePlaylists';
+import { youtubeVideoIdOf, type UnifiedPlaylist } from '../services/playlistModel';
 
 interface AddToPlaylistModalProps {
   isOpen: boolean;
@@ -28,14 +35,41 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
   const [newTitle, setNewTitle] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [addedPlaylistIds, setAddedPlaylistIds] = useState<Set<string>>(new Set());
+  // YouTube targets appear ONLY when the account actually holds write scope.
+  // Read-only sessions never see an action the backend cannot perform.
+  const [ytPlaylists, setYtPlaylists] = useState<UnifiedPlaylist[]>([]);
+  const [ytCanWrite, setYtCanWrite] = useState(false);
+  const [ytLoading, setYtLoading] = useState(false);
+  const [ytError, setYtError] = useState('');
 
   useEffect(() => {
-    if (isOpen) {
-      setPlaylists(getLocalPlaylists());
-      setNewTitle('');
-      setShowCreate(false);
-      setAddedPlaylistIds(new Set());
-    }
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setPlaylists(getLocalPlaylists());
+    setNewTitle('');
+    setShowCreate(false);
+    setAddedPlaylistIds(new Set());
+    setYtPlaylists([]);
+    setYtError('');
+    setYtCanWrite(false);
+    setYtLoading(true);
+    getYoutubeCapability()
+      .then((cap) => {
+        setYtCanWrite(cap.connected && cap.canWrite);
+        if (cap.connected && cap.canWrite) {
+          return listYoutubePlaylists(25).then(setYtPlaylists);
+        }
+      })
+      .catch(() => setYtError('YouTube playlists are unavailable.'))
+      .finally(() => setYtLoading(false));
   }, [isOpen]);
 
   if (!isOpen || !tracks.length) return null;
@@ -66,6 +100,45 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
     logPlaylistAdds(newPl.id);
     onSuccess?.(newPl.title, tracks.length);
     setTimeout(onClose, 600);
+  };
+
+  const [ytBusy, setYtBusy] = useState(false);
+
+  const handleSelectYoutube = async (pl: UnifiedPlaylist) => {
+    // Only tracks with a usable videoId can be added; others are reported,
+    // never pretended. Failures report per-track without closing the modal.
+    const usable = tracks
+      .map((t) => ({ track: t, videoId: youtubeVideoIdOf(t) }))
+      .filter((x): x is { track: Track; videoId: string } => !!x.videoId);
+    if (!usable.length) {
+      setYtError('None of these tracks have a YouTube video id, so they cannot be added to YouTube.');
+      return;
+    }
+    setYtBusy(true);
+    setYtError('');
+    let added = 0;
+    const failed: string[] = [];
+    for (const u of usable) {
+      try {
+        const r = await addVideoToYoutubePlaylist(pl.sourceId || pl.id, u.videoId);
+        if (r.ok) added++;
+        else failed.push(u.track.title);
+      } catch (e) {
+        if (isInsufficientScope(e)) {
+          setYtError('YouTube is read-only for this account. Reconnect with playlist access.');
+          setYtBusy(false);
+          return;
+        }
+        failed.push(u.track.title);
+      }
+    }
+    setYtBusy(false);
+    if (added) {
+      setAddedPlaylistIds((prev) => new Set([...prev, pl.id]));
+      onSuccess?.(pl.title, added);
+      setTimeout(onClose, 600);
+    }
+    if (failed.length) setYtError(`${failed.length} track${failed.length === 1 ? '' : 's'} could not be added.`);
   };
 
   const handleSelectPlaylist = (pl: LocalPlaylist) => {
@@ -108,6 +181,7 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
             </div>
             <button
               onClick={onClose}
+              aria-label="Close add to playlist"
               className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-white/60 hover:bg-white/15 hover:text-white transition-colors"
             >
               <X className="h-4 w-4" />
@@ -162,10 +236,61 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
               </form>
             )}
 
+            {/* YouTube targets — write access only, never a dead action */}
+            {ytCanWrite && (
+              <div className="space-y-1.5 pt-1">
+                <p className="px-1 text-[11px] font-bold uppercase tracking-wider text-white/40">
+                  YouTube playlists
+                </p>
+                {ytLoading && <p className="px-1 text-xs text-white/45">Loading YouTube playlists…</p>}
+                {!ytLoading &&
+                  ytPlaylists.map((pl) => {
+                    const isAdded = addedPlaylistIds.has(pl.id);
+                    return (
+                      <button
+                        key={pl.id}
+                        onClick={() => void handleSelectYoutube(pl)}
+                        disabled={ytBusy}
+                        className="flex w-full items-center gap-3 rounded-xl p-2.5 text-left hover:bg-white/[0.06] transition-colors group disabled:opacity-50"
+                      >
+                        <div className="h-10 w-10 rounded-lg bg-red-500/15 border border-red-500/25 flex items-center justify-center text-red-300 font-extrabold text-xs shrink-0 overflow-hidden">
+                          {pl.artwork ? (
+                            <img src={pl.artwork} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            pl.title.slice(0, 2).toUpperCase()
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[13.5px] font-semibold text-white">
+                            {pl.title}
+                          </p>
+                          <p className="truncate text-xs text-white/45">
+                            {pl.trackCount} songs • YouTube
+                          </p>
+                        </div>
+                        {isAdded ? (
+                          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500 text-black">
+                            <Check className="h-4 w-4 stroke-[3]" />
+                          </span>
+                        ) : (
+                          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/5 text-white/40 group-hover:bg-white/15 group-hover:text-white transition-colors">
+                            <Plus className="h-4 w-4" />
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                {!ytLoading && ytPlaylists.length === 0 && !ytError && (
+                  <p className="px-1 text-xs text-white/45">No YouTube playlists in this account.</p>
+                )}
+                {ytError && <p role="alert" className="px-1 text-xs text-rose-300">{ytError}</p>}
+              </div>
+            )}
+
             {/* Existing Playlists list */}
             {playlists.length > 0 && (
               <div className="space-y-1.5 pt-1">
-                <p className="px-1 text-[11px] font-bold uppercase tracking-wider text-white/40">Your playlists</p>
+                <p className="px-1 text-[11px] font-bold uppercase tracking-wider text-white/40">Wave playlists</p>
                 {playlists.map((pl) => {
                   const isAdded = addedPlaylistIds.has(pl.id);
                   return (

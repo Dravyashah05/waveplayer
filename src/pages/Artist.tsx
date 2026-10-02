@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
   Play,
   Pause,
@@ -22,10 +22,18 @@ import {
   Users,
 } from 'lucide-react';
 import { Track, Album, SearchArtist } from '../types';
-import { getSaavnArtistDetails, searchSaavnArtists } from '../services/saavnApi';
-import { getYTMusicArtist } from '../services/ytmusicApi';
-import { deduplicateTracks, deduplicateAlbums, deduplicateArtists } from '../services/searchEngine';
-import { fetchRadio } from '../services/recommendationApi';
+import { searchSaavnArtists } from '../services/saavnApi';
+import { deduplicateArtists } from '../services/searchEngine';
+import {
+  artistListenCount,
+  detectReleaseType,
+  fetchArtistDetail,
+  isArtistFollowed,
+  rankSongsForArtist,
+  toggleArtistFollow,
+  type CanonicalArtist,
+} from '../services/artistAlbum';
+import { startRadioAndPlay } from '../services/radioEngine';
 import { recommendTracks } from '../services/recommendationEngine';
 import { playerStore } from '../services/playerStore';
 import { usePlayerEngine } from '../services/playerEngine';
@@ -72,6 +80,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
       }
     },
   });  const [artist, setArtist] = useState<SearchArtist | null>(null);
+  const [canonical, setCanonical] = useState<CanonicalArtist | null>(null);
   const [topSongs, setTopSongs] = useState<Track[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
   const [singles, setSingles] = useState<Album[]>([]);
@@ -79,8 +88,12 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
   const [recommended, setRecommended] = useState<Track[]>([]);
   const [bio, setBio] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [loadingSecondary, setLoadingSecondary] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [showAllSongs, setShowAllSongs] = useState(false);
+  const [followed, setFollowed] = useState(false);
+  const [listenedCount, setListenedCount] = useState(0);
+  const reduceMotion = useReducedMotion();
 
   // Discovery / Empty State
   const [featuredArtists, setFeaturedArtists] = useState<SearchArtist[]>([]);
@@ -113,10 +126,13 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
     };
   }, []);
 
-  // Multi-source loader
+  // Multi-source loader (canonical layer, progressive: core first).
   const loadArtistData = useCallback(async (id: string) => {
     setLoading(true);
+    setLoadingSecondary(false);
     setLoadError('');
+    setArtist(null);
+    setCanonical(null);
     setTopSongs([]);
     setAlbums([]);
     setSingles([]);
@@ -124,79 +140,78 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
     setRecommended([]);
     setBio('');
     setShowAllSongs(false);
+    setFollowed(false);
+    setListenedCount(0);
 
-    try {
-      // 1. Concurrent fetch from JioSaavn & YT Music
-      const isYT = id.startsWith('UC') || id.startsWith('FEmusic') || id.length === 24;
-
-      const [saavnRes, ytRes] = await Promise.allSettled([
-        getSaavnArtistDetails(id),
-        getYTMusicArtist(id),
-      ]);
-
-      const saavnData = saavnRes.status === 'fulfilled' ? saavnRes.value : null;
-      const ytData = ytRes.status === 'fulfilled' ? ytRes.value : null;
-
-      let resolvedArtist: SearchArtist | null = null;
-      let rawSongs: Track[] = [];
-      let rawAlbums: Album[] = [];
-      let rawSingles: Album[] = [];
-      let rawSimilar: SearchArtist[] = [];
-      let resolvedBio = '';
-
-      if (saavnData && saavnData.artist) {
-        resolvedArtist = saavnData.artist;
-        if (saavnData.topSongs?.length) rawSongs.push(...saavnData.topSongs);
-        if (saavnData.topAlbums?.length) rawAlbums.push(...saavnData.topAlbums);
-        if (saavnData.bio) resolvedBio = saavnData.bio;
-      }
-
-      if (ytData && ytData.artist) {
-        if (!resolvedArtist) resolvedArtist = ytData.artist;
-        if (ytData.topSongs?.length) rawSongs.push(...ytData.topSongs);
-        if (ytData.topAlbums?.length) rawAlbums.push(...ytData.topAlbums);
-        if (ytData.singles?.length) rawSingles.push(...ytData.singles);
-        if (ytData.similarArtists?.length) rawSimilar.push(...ytData.similarArtists);
-      }
-
-      // If only YT Music data was found and we have an artist name, try searching Saavn for bio & 320k tracks
-      if (resolvedArtist && resolvedArtist.name && !saavnData) {
-        try {
-          const saavnSearch = await searchSaavnArtists(resolvedArtist.name, 1, 1);
-          if (saavnSearch.artists.length > 0 && saavnSearch.artists[0].artistId) {
-            const secondarySaavn = await getSaavnArtistDetails(saavnSearch.artists[0].artistId);
-            if (secondarySaavn) {
-              if (secondarySaavn.topSongs?.length) rawSongs.push(...secondarySaavn.topSongs);
-              if (secondarySaavn.topAlbums?.length) rawAlbums.push(...secondarySaavn.topAlbums);
-              if (secondarySaavn.bio) resolvedBio = secondarySaavn.bio;
-            }
-          }
-        } catch {}
-      }
-
-      setArtist(resolvedArtist);
-      const songs = deduplicateTracks(rawSongs);
-      setTopSongs(songs);
-      setAlbums(deduplicateAlbums(rawAlbums));
-      setSingles(deduplicateAlbums(rawSingles));
-      setSimilarArtists(deduplicateArtists(rawSimilar));
-      setBio(resolvedBio);
-      if (!resolvedArtist) {
-        setLoadError('Artist not found. It may have been removed or the link is wrong.');
-      } else {
-        // Recommended: central engine seeded from the artist's own top songs.
-        const seeds = songs.slice(0, 3);
-        const exclude = new Set(songs.map((t) => t.id));
+    const applyDetail = (
+      detail: {
+        artist: CanonicalArtist;
+        topSongs: Track[];
+        albums: Album[];
+        singles: Album[];
+        similar: SearchArtist[];
+        bio?: string;
+      } | null,
+      isComplete: boolean,
+    ) => {
+      if (!detail) return;
+      const compat: SearchArtist = {
+        artistId: detail.artist.sourceIds.ytmusic || detail.artist.sourceIds.saavn || detail.artist.id,
+        name: detail.artist.name,
+        thumbnails: detail.artist.artwork ? [{ url: detail.artist.artwork, width: 0, height: 0 }] : [],
+        type: 'ARTIST',
+        description: detail.artist.description,
+        source: detail.artist.sourceIds.ytmusic ? 'ytmusic' : 'saavn',
+      };
+      setCanonical(detail.artist);
+      setArtist(compat);
+      setTopSongs(detail.topSongs);
+      setAlbums(detail.albums);
+      setSingles(detail.singles);
+      setBio(detail.bio || '');
+      setFollowed(isArtistFollowed(compat.artistId));
+      setListenedCount(artistListenCount(detail.topSongs));
+      if (isComplete) {
+        // Secondary sections arrive with the complete payload.
+        setSimilarArtists(detail.similar);
+        const seeds = detail.topSongs.slice(0, 3);
+        const exclude = new Set(detail.topSongs.map((t) => t.id));
         recommendTracks({ seedTracks: seeds, excludeIds: exclude, limit: 8 })
           .then((recs) => setRecommended(recs.filter((t) => !exclude.has(t.id)).slice(0, 8)))
           .catch(() => setRecommended([]));
+      }
+    };
+
+    try {
+      const detail = await fetchArtistDetail(id, (stage, partial) => {
+        if (stage === 'core' && partial) {
+          applyDetail(partial, false);
+          setLoading(false);
+          setLoadingSecondary(true);
+        }
+      });
+      if (!detail) {
+        setLoadError('Artist not found. It may have been removed or the link is wrong.');
+      } else {
+        applyDetail(detail, true);
       }
     } catch (err) {
       setLoadError('Something went wrong loading this artist. Check your connection and try again.');
     } finally {
       setLoading(false);
+      setLoadingSecondary(false);
     }
   }, []);
+
+  const handleToggleFollow = () => {
+    if (!canonical && !artist) return;
+    const target = canonical
+      ? { id: artist?.artistId || canonical.id, name: canonical.name, artwork: canonical.artwork }
+      : { id: artist!.artistId, name: artist!.name, artwork: artist!.thumbnails?.[0]?.url };
+    const nowFollowed = toggleArtistFollow(target);
+    setFollowed(nowFollowed);
+    setToastMessage(nowFollowed ? `Following ${target.name}` : `Unfollowed ${target.name}`);
+  };
 
   // Discovery Loader for idle state
   const loadFeaturedArtists = useCallback(async () => {
@@ -243,29 +258,27 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
 
   const handleStartRadio = async () => {
     if (!artist) return;
-    setToastMessage(`Starting Radio for "${artist.name}"...`);
+    setToastMessage(`Starting ${artist.name} Radio...`);
     try {
-      let seedTrack: Track;
-      if (topSongs.length > 0) {
-        seedTrack = topSongs[0];
-      } else {
-        seedTrack = {
-          id: artist.artistId,
-          title: artist.name,
-          author: artist.name,
-          thumbnail: artist.thumbnails?.[0]?.url || '',
-          duration: '3:30',
-          durationSeconds: 210,
-          url: '',
-          type: 'SONG',
-        };
-      }
-      const radioTracks = await fetchRadio(seedTrack, 25);
-      if (radioTracks && radioTracks.length) {
-        onPlay(radioTracks[0], radioTracks);
-      } else if (topSongs.length) {
-        handlePlayAll();
-      }
+      const seedTrack: Track =
+        topSongs.length > 0
+          ? topSongs[0]
+          : {
+              id: artist.artistId,
+              title: artist.name,
+              author: artist.name,
+              thumbnail: artist.thumbnails?.[0]?.url || '',
+              duration: '3:30',
+              durationSeconds: 210,
+              url: '',
+              type: 'SONG',
+            };
+      await startRadioAndPlay('artist', {
+        track: seedTrack,
+        artistId: artist.artistId,
+        artistName: artist.name,
+        contextTracks: topSongs,
+      });
     } catch {
       setToastMessage('Could not start radio');
     }
@@ -411,14 +424,16 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
     );
   }
 
-  const avatarUrl = artist?.thumbnails?.[0]?.url || '';
-  const visibleSongs = showAllSongs ? topSongs : topSongs.slice(0, 5);
+  const avatarUrl = canonical?.artwork || artist?.thumbnails?.[0]?.url || '';
+  // Heard tracks surface first (stable); unheard keep provider order.
+  const rankedSongs = rankSongsForArtist(topSongs);
+  const visibleSongs = showAllSongs ? rankedSongs : rankedSongs.slice(0, 5);
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
+      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+      transition={{ duration: reduceMotion ? 0.01 : 0.3 }}
       className="space-y-8 pb-24"
     >
       {/* Back Button */}
@@ -514,6 +529,21 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
 
               <button
                 type="button"
+                onClick={handleToggleFollow}
+                aria-pressed={followed}
+                title={followed ? 'Unfollow this artist (Wave library)' : 'Follow this artist (Wave library)'}
+                className={`flex h-11 items-center gap-2 rounded-full border px-5 text-[14px] font-semibold transition-all active:scale-95 ${
+                  followed
+                    ? 'bg-white text-black border-white hover:bg-white/90'
+                    : 'bg-white/[0.08] hover:bg-white/[0.14] border-white/[0.1] text-white'
+                }`}
+              >
+                <Heart className={`h-4 w-4 ${followed ? 'fill-current' : ''}`} />
+                {followed ? 'Following' : 'Follow'}
+              </button>
+
+              <button
+                type="button"
                 onClick={handleShare}
                 className="flex h-11 w-11 items-center justify-center rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-white transition-all active:scale-95"
                 title="Share"
@@ -579,7 +609,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
             {albums.map((al) => (
               <motion.div
                 key={al.albumId}
-                whileHover={{ y: -4 }}
+                whileHover={reduceMotion ? undefined : { y: -4 }}
                 onClick={() => onNavigate?.('album', al.albumId)}
                 {...activateCard(() => onNavigate?.('album', al.albumId))}
                 aria-label={`Open album ${al.name}`}
@@ -602,7 +632,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                   {al.name}
                 </p>
                 <p className="truncate text-[11px] text-[#8e8e93] mt-0.5">
-                  {al.year ? `${al.year} • ` : ''}Album
+                  {al.year ? `${al.year} • ` : ''}{detectReleaseType(al.name || '', typeof al.songCount === 'number' ? al.songCount : null)}
                 </p>
               </motion.div>
             ))}
@@ -625,7 +655,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
             {singles.map((sg) => (
               <motion.div
                 key={sg.albumId}
-                whileHover={{ y: -4 }}
+                whileHover={reduceMotion ? undefined : { y: -4 }}
                 onClick={() => onNavigate?.('album', sg.albumId)}
                 {...activateCard(() => onNavigate?.('album', sg.albumId))}
                 aria-label={`Open single ${sg.name}`}
@@ -648,7 +678,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                   {sg.name}
                 </p>
                 <p className="truncate text-[11px] text-[#8e8e93] mt-0.5">
-                  {sg.year ? `${sg.year} • ` : ''}Single
+                  {sg.year ? `${sg.year} • ` : ''}{detectReleaseType(sg.name || '', typeof sg.songCount === 'number' ? sg.songCount : null)}
                 </p>
               </motion.div>
             ))}
@@ -659,7 +689,20 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
       {/* ======================================================= */}
       {/* 5. SIMILAR ARTISTS SECTION */}
       {/* ======================================================= */}
-      {similarArtists.length > 0 && (
+      {loadingSecondary && similarArtists.length === 0 ? (
+        <div className="space-y-3.5" aria-label="Loading related artists">
+          <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+          <div className="flex gap-4 overflow-hidden">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="min-w-[125px] w-[125px] shrink-0 animate-pulse">
+                <div className="aspect-square w-full rounded-full bg-white/[0.04] border border-white/5" />
+                <div className="mt-2.5 h-3 w-3/4 mx-auto rounded-full bg-white/[0.06]" />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        similarArtists.length > 0 && (
         <div className="space-y-3.5">
           <div className="flex items-center justify-between px-1">
             <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
@@ -697,20 +740,34 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
             ))}
           </div>
         </div>
+        )
       )}
 
       {/* ======================================================= */}
       {/* 6. RECOMMENDED (central recommendation engine) */}
       {/* ======================================================= */}
-      {recommended.length > 0 && (
+      {loadingSecondary && recommended.length === 0 ? (
+        <div className="space-y-3.5" aria-label="Loading recommended songs">
+          <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+          <div className="space-y-2">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="h-14 rounded-2xl bg-white/[0.04] border border-white/5 animate-pulse" />
+            ))}
+          </div>
+        </div>
+      ) : (
+        recommended.length > 0 && (
         <div className="space-y-3.5">
           <div className="flex items-center justify-between px-1">
             <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-amber-400" /> Fans Also Like These Songs
+              <Sparkles className="h-5 w-5 text-amber-400" />
+              {listenedCount > 0 ? `Because you listen to ${artist?.name || 'this artist'}` : 'Fans Also Like These Songs'}
             </h2>
           </div>
           <p className="-mt-2 px-1 text-[12px] text-white/45">
-            Because you listen to {artist?.name || 'this artist'} • Similar to these songs
+            {listenedCount > 0
+              ? `Based on your listening history • Similar to these songs`
+              : `Similar to songs by ${artist?.name || 'this artist'}`}
           </p>
           <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-2 divide-y divide-white/[0.04]">
             {recommended.map((track, idx) => (
@@ -728,6 +785,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
             ))}
           </div>
         </div>
+        )
       )}
 
       {/* ======================================================= */}
@@ -774,11 +832,12 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
       <AnimatePresence>
         {toastMessage && (
           <motion.div
+            role="status"
             initial={{ opacity: 0, y: 30, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 30, scale: 0.95 }}
-            transition={{ duration: 0.2 }}
-            className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
+            transition={{ duration: reduceMotion ? 0.01 : 0.2 }}
+            className="fixed bottom-[calc(112px+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
           >
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
             <span>{toastMessage}</span>
@@ -788,3 +847,4 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
     </motion.div>
   );
 };
+

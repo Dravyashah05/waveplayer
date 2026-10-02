@@ -10,18 +10,29 @@ import {
   Shuffle,
   Clock3,
   ChevronDown,
+  ChevronUp,
   History,
   ArrowUpToLine,
   Trash,
+  Radio,
+  MoreVertical,
+  Disc3,
+  Mic2,
+  FolderPlus,
+  ListPlus,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Track } from '../types';
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { settingsStore } from '../services/settingsStore';
 import { playerStore } from '../services/playerStore';
 import { getUpNext } from '../services/recommendationEngine';
 import { fetchAutoplay } from '../services/recommendationApi';
 import { isAutoplayEnabled, setAutoplayEnabled, subscribeAutoplay } from '../services/autoplay';
+import { getActiveSession, isRadioGenerated, stopRadio, subscribeRadio } from '../services/radioEngine';
+import { describeSource, radioReason, type QueueItemMeta } from '../services/queueMeta';
+import { AddToPlaylistModal } from './AddToPlaylistModal';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface Props {
   open: boolean;
@@ -31,6 +42,7 @@ interface Props {
   onPlayIndex: (i: number) => void;
   onClear: () => void;
   onRemove?: (idx: number) => void;
+  onNavigate?: (page: string, param?: string) => void;
 }
 
 type Tab = 'queue' | 'upnext';
@@ -43,7 +55,26 @@ function fmtTotal(seconds: number) {
   return `${m} min`;
 }
 
-export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClose, onPlayIndex, onClear, onRemove }) => {
+const MenuBtn: React.FC<{
+  icon: React.ReactNode;
+  label: string;
+  danger?: boolean;
+  onClick: () => void;
+}> = ({ icon, label, danger, onClick }) => (
+  <button
+    type="button"
+    role="menuitem"
+    onClick={onClick}
+    className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium transition-colors ${
+      danger ? 'text-rose-300 hover:bg-rose-500 hover:text-white' : 'text-white hover:bg-white hover:text-black'
+    }`}
+  >
+    <span className="shrink-0">{icon}</span>
+    {label}
+  </button>
+);
+
+export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClose, onPlayIndex, onClear, onRemove, onNavigate }) => {
   const [glassIntensity, setGlassIntensity] = useState(() => settingsStore.get().glassIntensity);
   const [glassEnabled, setGlassEnabled] = useState(() => settingsStore.get().glassEnabled);
   const [upNext, setUpNext] = useState<Track[]>([]);
@@ -53,8 +84,19 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
   const [autoplay, setAutoplay] = useState(() => isAutoplayEnabled());
+  const [radioLabel, setRadioLabel] = useState<string | null>(() => getActiveSession()?.label ?? null);
 
   useEffect(() => subscribeAutoplay(() => setAutoplay(isAutoplayEnabled())), []);
+  useEffect(() => {
+    const syncRadio = () => setRadioLabel(getActiveSession()?.label ?? null);
+    const unsubRadio = subscribeRadio(syncRadio);
+    const unsubSettings = settingsStore.subscribe(() => setAutoplay(isAutoplayEnabled()));
+    syncRadio();
+    return () => {
+      unsubRadio();
+      unsubSettings();
+    };
+  }, []);
 
   useEffect(() => {
     const unsub = settingsStore.subscribe(() => {
@@ -116,6 +158,47 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
   const upNextSlice = queue.slice(currentIndex + 1);
   const historySlice = queue.slice(0, currentIndex);
   const remainingDuration = useMemo(() => upNextSlice.reduce((a, t) => a + (t.durationSeconds || 0), 0), [upNextSlice]);
+  // Provenance sidecar mirrors the queue 1:1 (App re-renders on every store
+  // emit, so reading it here stays in sync without a second subscription).
+  const metas: QueueItemMeta[] = useMemo(() => playerStore.queueMetas(), [queue]);
+  const metaAt = (realIdx: number): QueueItemMeta | null => metas[realIdx] ?? null;
+  const isRadioIdx = (realIdx: number): boolean => {
+    const m = metaAt(realIdx);
+    if (m) return m.addedBy === 'radio' || m.addedBy === 'autoplay';
+    return isRadioGenerated(queue[realIdx]?.id || '');
+  };
+  // Upcoming partitions (order-preserving): user-picked first, then the
+  // radio/autoplay tail — subtle grouping, never a second queue.
+  const upcoming = useMemo(
+    () => upNextSlice.map((t, offset) => ({ track: t, realIdx: currentIndex + 1 + offset })),
+    [upNextSlice, currentIndex],
+  );
+  // Per-item overflow menu + add-to-playlist target.
+  const [menuIdx, setMenuIdx] = useState<number | null>(null);
+  const [pickerTrack, setPickerTrack] = useState<Track | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  // Reset transient UI whenever the drawer closes.
+  useEffect(() => {
+    if (!open) {
+      setMenuIdx(null);
+      setPickerTrack(null);
+      setDragIndex(null);
+      setDragOver(null);
+    }
+  }, [open ]);
+
+  // Escape closes the item menu first, then the drawer.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (menuIdx !== null) setMenuIdx(null);
+      else onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, menuIdx, onClose]);
 
   const handleMove = (from: number, to: number) => {
     if (from === to) return;
@@ -205,6 +288,18 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                           </span>
                           <span className="h-1 w-1 rounded-full bg-white/15" />
                           <span className="text-white/60">{currentIndex + 1} of {queue.length}</span>
+                          {radioLabel && (
+                            <>
+                              <span className="h-1 w-1 rounded-full bg-white/15" />
+                              <span
+                                className="inline-flex max-w-[16ch] items-center gap-1 truncate rounded-full bg-white/10 border border-white/10 px-1.5 py-0.5 text-[10px] font-bold text-white/80"
+                                title={radioLabel}
+                              >
+                                <Radio className="h-3 w-3 shrink-0" />
+                                <span className="truncate">{radioLabel}</span>
+                              </span>
+                            </>
+                          )}
                           {playerStore.shuffle && (
                             <>
                               <span className="h-1 w-1 rounded-full bg-white/15" />
@@ -228,6 +323,16 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                     <Sparkles className="h-3.5 w-3.5" />
                     <span className="hidden sm:inline">Autoplay</span>
                   </button>
+                  {radioLabel && (
+                    <button
+                      onClick={() => stopRadio()}
+                      title={`Stop radio (${radioLabel}) — queue stays intact`}
+                      className="flex h-8 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-2.5 text-xs font-semibold text-white/70 hover:bg-white hover:text-black hover:border-white transition-colors"
+                    >
+                      <Radio className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Stop radio</span>
+                    </button>
+                  )}
                   {queue.length > 1 && (
                     <button
                       onClick={() => playerStore.toggleShuffle()}
@@ -240,9 +345,10 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                   )}
                   {queue.length > 0 && (
                     <button
-                      onClick={onClear}
+                      onClick={() => setConfirmClear(true)}
                       className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-white/60 hover:bg-white hover:text-black hover:border-white transition-colors"
                       title="Clear queue"
+                      aria-label={`Clear queue (${queue.length} tracks)`}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -317,7 +423,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                             key={`empty-up-${t.id}`}
                             className="flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] p-2.5 backdrop-blur hover:bg-white/[0.06] transition-colors"
                           >
-                            <img src={t.thumbnail} alt={t.title} className="h-11 w-11 rounded-xl object-cover ring-1 ring-white/10 shrink-0" referrerPolicy="no-referrer" />
+                            <img src={t.thumbnail} alt={t.title} className="h-11 w-11 rounded-xl object-cover ring-1 ring-white/10 shrink-0" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-sm font-semibold leading-none text-white">{t.title}</p>
                               <p className="truncate text-xs text-white/45">{t.author}</p>
@@ -360,7 +466,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                           transition={{ delay: idx * 0.03, duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
                           className="group flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] p-2.5 backdrop-blur hover:bg-white/[0.06] hover:border-white/[0.10] transition-colors"
                         >
-                          <img src={t.thumbnail} alt={t.title} className="h-12 w-12 shrink-0 rounded-xl object-cover ring-1 ring-white/10" referrerPolicy="no-referrer" />
+                          <img src={t.thumbnail} alt={t.title} className="h-12 w-12 shrink-0 rounded-xl object-cover ring-1 ring-white/10" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold leading-tight text-white">{t.title}</p>
                             <p className="truncate text-xs text-white/45">{t.author}</p>
@@ -418,7 +524,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                         <div className="absolute inset-0 bg-gradient-to-br from-white/[0.06] via-transparent to-transparent pointer-events-none" />
                         <div className="relative flex gap-3">
                           <div className="relative h-[76px] w-[76px] shrink-0 overflow-hidden rounded-2xl bg-neutral-900 ring-1 ring-white/10 shadow-[0_8px_20px_rgba(0,0,0,0.4)]">
-                            <img src={now.thumbnail} alt={now.title} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                            <img src={now.thumbnail} alt={now.title} className="h-full w-full object-cover" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
                             <span className="absolute inset-0 grid place-items-center bg-black/20 backdrop-blur-[1px]">
                               <span className="flex items-end gap-0.5 h-4 rounded-full bg-black/45 px-1.5 py-1 backdrop-blur border border-white/10">
@@ -434,6 +540,23 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                               <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-2 py-1 text-[11px] font-medium text-white/80">
                                 <Clock3 className="h-3 w-3 opacity-70" /> {now.duration || '—'}
                               </span>
+                              {(() => {
+                                const m = metaAt(currentIndex);
+                                if (!m) return null;
+                                if (m.addedBy === 'radio' || m.addedBy === 'autoplay') {
+                                  return (
+                                    <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/10 px-2 py-1 text-[11px] font-bold text-white/80" title={radioReason(m) || 'Radio'}>
+                                      <Radio className="h-3 w-3" /> {m.addedBy === 'autoplay' ? 'Autoplay' : 'Radio'}
+                                    </span>
+                                  );
+                                }
+                                const label = describeSource(m);
+                                return label ? (
+                                  <span className="inline-flex max-w-[20ch] truncate items-center gap-1 rounded-full border border-white/10 bg-white/10 px-2 py-1 text-[11px] font-medium text-white/70" title={label}>
+                                    {label}
+                                  </span>
+                                ) : null;
+                              })()}
                               {now.albumName && (
                                 <span className="hidden sm:inline-flex max-w-[14ch] truncate items-center gap-1 rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] font-medium text-white/60">
                                   <Music2 className="h-3 w-3" /> {now.albumName}
@@ -455,18 +578,18 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                     </section>
                   )}
 
-                  {/* Next up */}
-                  <section>
+                  {/* Up next (ordered; radio tail grouped with a subtle header) */}
+                  <section aria-label="Up next">
                     <div className="mb-2 flex items-center justify-between px-1">
                       <h4 className="text-[11px] font-bold uppercase tracking-widest text-white/40">
-                        {upNextSlice.length ? `Next up • ${upNextSlice.length}` : 'Next up'}
+                        {upcoming.length ? `Up next • ${upcoming.length}` : 'Up next'}
                       </h4>
-                      {upNextSlice.length > 0 && (
+                      {upcoming.length > 0 && (
                         <span className="text-[11px] font-medium text-white/30">{fmtTotal(remainingDuration)}</span>
                       )}
                     </div>
 
-                    {upNextSlice.length === 0 ? (
+                    {upcoming.length === 0 ? (
                       <div className="rounded-2xl border border-dashed border-white/[0.08] bg-white/[0.02] p-5 text-center">
                         <p className="text-sm font-semibold text-white">You’re at the end of the queue</p>
                         <p className="mx-auto mt-1 max-w-[28ch] text-xs leading-relaxed text-white/40">
@@ -481,12 +604,24 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                       </div>
                     ) : (
                       <motion.div layout className="grid gap-2">
-                        {upNextSlice.map((t, offset) => {
-                          const realIdx = currentIndex + 1 + offset;
+                        {upcoming.map((u, i) => {
+                          const t = u.track;
+                          const realIdx = u.realIdx;
+                          const offset = i;
+                          const radio = isRadioIdx(realIdx);
+                          const showRadioHeader = radio && (i === 0 || !isRadioIdx(upcoming[i - 1].realIdx));
                           const isDragOver = dragOver === realIdx;
+                          const meta = metaAt(realIdx);
+                          const sourceLabel = describeSource(meta);
+                          const reason = radioReason(meta);
                           return (
+                            <React.Fragment key={`${t.id}-${realIdx}`}>
+                            {showRadioHeader && (
+                              <p className="flex items-center gap-1.5 px-1 pt-1 text-[11px] font-bold uppercase tracking-widest text-white/35" role="separator" aria-label="Radio and autoplay">
+                                <Radio className="h-3 w-3" /> Radio & autoplay
+                              </p>
+                            )}
                             <motion.div
-                              key={`${t.id}-${realIdx}`}
                               layout
                               initial={{ opacity: 0, y: 6 }}
                               animate={{ opacity: 1, y: 0 }}
@@ -515,7 +650,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                               </button>
 
                               <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-neutral-900 ring-1 ring-white/10">
-                                <img src={t.thumbnail} alt={t.title} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                                <img src={t.thumbnail} alt={t.title} className="h-full w-full object-cover" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                                 <span className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/60 text-[10px] font-bold text-white ring-1 ring-white/10 backdrop-blur">
                                   {realIdx + 1}
                                 </span>
@@ -533,48 +668,127 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-[13px] font-semibold leading-tight text-white">{t.title}</p>
                                 <p className="truncate text-xs text-white/45">{t.author}</p>
-                                <div className="mt-1 flex items-center gap-1">
+                                <div className="mt-1 flex flex-wrap items-center gap-1">
                                   <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-white/60">
                                     <Clock3 className="h-3 w-3 opacity-60" /> {t.duration || '—'}
                                   </span>
-                                  {offset === 0 && <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] font-bold text-black">Next</span>}
+                                  {offset === 0 && !radio && <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] font-bold text-black">Next</span>}
+                                  {radio ? (
+                                    <span
+                                      className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-bold text-white/60"
+                                      title={reason || 'Added by radio'}
+                                    >
+                                      <Radio className="h-3 w-3" /> {meta?.addedBy === 'autoplay' ? 'Autoplay' : 'Radio'}
+                                    </span>
+                                  ) : sourceLabel ? (
+                                    <span
+                                      className="inline-flex max-w-[18ch] truncate items-center gap-1 rounded-full border border-white/10 bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-white/55"
+                                      title={sourceLabel}
+                                    >
+                                      {sourceLabel}
+                                    </span>
+                                  ) : null}
                                 </div>
+                                {radio && reason && reason !== 'Radio' && (
+                                  <p className="mt-0.5 truncate text-[10px] text-white/35">{reason}</p>
+                                )}
                               </div>
 
                               <div className="flex items-center gap-1 shrink-0">
+                                {/* Touch-friendly reorder (drag is desktop-only) */}
+                                <span className="flex sm:hidden items-center" role="group" aria-label={`Reorder ${t.title}`}>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMove(realIdx, realIdx - 1)}
+                                    disabled={realIdx <= currentIndex + 1}
+                                    aria-label={`Move ${t.title} up`}
+                                    className="flex h-8 w-7 items-center justify-center rounded-full text-white/50 hover:text-white disabled:opacity-25"
+                                  >
+                                    <ChevronUp className="h-4 w-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMove(realIdx, realIdx + 1)}
+                                    disabled={realIdx >= queue.length - 1}
+                                    aria-label={`Move ${t.title} down`}
+                                    className="flex h-8 w-7 items-center justify-center rounded-full text-white/50 hover:text-white disabled:opacity-25"
+                                  >
+                                    <ChevronDown className="h-4 w-4" />
+                                  </button>
+                                </span>
                                 <button
                                   onClick={() => onPlayIndex(realIdx)}
-                                  className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black shadow hover:bg-neutral-100 active:scale-95 transition-all sm:hidden"
+                                  className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black shadow hover:bg-neutral-100 active:scale-95 transition-all"
                                   title="Play"
-                                >
-                                  <Play className="h-3.5 w-3.5 fill-current ml-0.5" />
-                                </button>
-                                <button
-                                  onClick={() => onPlayIndex(realIdx)}
-                                  className="hidden sm:flex h-8 w-8 items-center justify-center rounded-full bg-white text-black shadow hover:bg-neutral-100 active:scale-95 transition-all"
-                                  title="Play"
+                                  aria-label={`Play ${t.title}`}
                                 >
                                   <Play className="h-3 w-3 fill-current ml-0.5" />
                                 </button>
-                                <button
-                                  onClick={() => {
-                                    // move to top (play next)
-                                    handleMove(realIdx, currentIndex + 1);
-                                  }}
-                                  className="hidden lg:flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-white/60 hover:bg-white hover:text-black hover:border-white transition-colors"
-                                  title="Play next"
-                                >
-                                  <ArrowUpToLine className="h-3.5 w-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => (onRemove ? onRemove(realIdx) : playerStore.removeFromQueue(realIdx))}
-                                  className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-white/60 hover:bg-white hover:text-black hover:border-white transition-colors"
-                                  title="Remove"
-                                >
-                                  <X className="h-3.5 w-3.5" />
-                                </button>
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={() => setMenuIdx(menuIdx === realIdx ? null : realIdx)}
+                                    aria-label={`More actions for ${t.title}`}
+                                    aria-expanded={menuIdx === realIdx}
+                                    title="More actions"
+                                    className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-white/60 hover:bg-white hover:text-black hover:border-white transition-colors"
+                                  >
+                                    <MoreVertical className="h-4 w-4" />
+                                  </button>
+                                  {menuIdx === realIdx && (
+                                    <div
+                                      role="menu"
+                                      aria-label={`${t.title} actions`}
+                                      className="absolute right-0 z-30 mt-1 w-52 overflow-hidden rounded-2xl border border-white/10 bg-[#141416] shadow-[0_24px_64px_rgba(0,0,0,0.85)]"
+                                    >
+                                      <div className="p-1.5">
+                                        <MenuBtn
+                                          icon={<Play className="h-4 w-4" />}
+                                          label="Play"
+                                          onClick={() => { setMenuIdx(null); onPlayIndex(realIdx); }}
+                                        />
+                                        <MenuBtn
+                                          icon={<ListPlus className="h-4 w-4" />}
+                                          label="Play next"
+                                          onClick={() => { setMenuIdx(null); playerStore.playNext(t); }}
+                                        />
+                                        <MenuBtn
+                                          icon={<FolderPlus className="h-4 w-4" />}
+                                          label="Add to playlist"
+                                          onClick={() => { setMenuIdx(null); setPickerTrack(t); }}
+                                        />
+                                        {onNavigate && (
+                                          <MenuBtn
+                                            icon={<Mic2 className="h-4 w-4" />}
+                                            label="Open artist"
+                                            onClick={() => { setMenuIdx(null); onNavigate('artist', t.author); }}
+                                          />
+                                        )}
+                                        {onNavigate && t.albumId && (
+                                          <MenuBtn
+                                            icon={<Disc3 className="h-4 w-4" />}
+                                            label="Open album"
+                                            onClick={() => { setMenuIdx(null); onNavigate('album', t.albumId!); }}
+                                          />
+                                        )}
+                                        <MenuBtn
+                                          icon={<ArrowUpToLine className="h-4 w-4" />}
+                                          label="Move to top"
+                                          onClick={() => { setMenuIdx(null); handleMove(realIdx, currentIndex + 1); }}
+                                        />
+                                        <MenuBtn
+                                          icon={<X className="h-4 w-4" />}
+                                          label="Remove"
+                                          danger
+                                          onClick={() => { setMenuIdx(null); if (onRemove) onRemove(realIdx); else playerStore.removeFromQueue(realIdx); }}
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </motion.div>
+                            </React.Fragment>
                           );
                         })}
                       </motion.div>
@@ -616,7 +830,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                                       key={`h-${t.id}-${realIdx}`}
                                       className="flex items-center gap-2.5 rounded-2xl border border-white/[0.04] bg-white/[0.01] p-2 opacity-75 hover:opacity-100 transition-opacity"
                                     >
-                                      <img src={t.thumbnail} alt={t.title} className="h-10 w-10 rounded-xl object-cover ring-1 ring-white/5 shrink-0 grayscale-[0.15]" referrerPolicy="no-referrer" />
+                                      <img src={t.thumbnail} alt={t.title} className="h-10 w-10 rounded-xl object-cover ring-1 ring-white/5 shrink-0 grayscale-[0.15]" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                                       <div className="min-w-0 flex-1">
                                         <p className="truncate text-xs font-semibold text-white/80">{t.title}</p>
                                         <p className="truncate text-[11px] text-white/35">{t.author}</p>
@@ -641,6 +855,25 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
               )}
             </div>
 
+            {/* Add-to-playlist for queue items (Wave playlists; YouTube only with write scope) */}
+            <AddToPlaylistModal
+              isOpen={!!pickerTrack}
+              onClose={() => setPickerTrack(null)}
+              tracks={pickerTrack ? [pickerTrack] : []}
+            />
+
+            <ConfirmDialog
+              open={confirmClear}
+              title="Clear the queue?"
+              body={`This removes all ${queue.length} queued tracks. Playback stops. This cannot be undone.`}
+              confirmLabel="Clear queue"
+              onCancel={() => setConfirmClear(false)}
+              onConfirm={() => {
+                setConfirmClear(false);
+                onClear();
+              }}
+            />
+
             {/* Footer actions */}
             <div className="shrink-0 border-t border-white/[0.06] bg-black/25 backdrop-blur p-3 sm:p-4 pb-[max(12px,env(safe-area-inset-bottom))]">
               {queue.length > 0 && tab === 'queue' ? (
@@ -659,7 +892,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                       <div className="mt-2 flex gap-2 overflow-x-auto scrollbar-none pb-1 -mx-1 px-1">
                         {upNext.slice(0, 6).map((t) => (
                           <div key={`strip-${t.id}`} className="flex w-[160px] shrink-0 items-center gap-2 rounded-2xl border border-white/[0.06] bg-white/[0.04] p-2 backdrop-blur">
-                            <img src={t.thumbnail} alt={t.title} className="h-10 w-10 rounded-xl object-cover ring-1 ring-white/10 shrink-0" referrerPolicy="no-referrer" />
+                            <img src={t.thumbnail} alt={t.title} className="h-10 w-10 rounded-xl object-cover ring-1 ring-white/10 shrink-0" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-xs font-semibold leading-tight text-white">{t.title}</p>
                               <p className="truncate text-[11px] text-white/40">{t.author}</p>
@@ -686,7 +919,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                         <Shuffle className="h-3.5 w-3.5" /> {playerStore.shuffle ? 'Shuffle on' : 'Shuffle'}
                       </button>
                       <button
-                        onClick={onClear}
+                        onClick={() => setConfirmClear(true)}
                         className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-bold text-white/70 hover:bg-white hover:text-black hover:border-white"
                       >
                         <Trash className="h-3.5 w-3.5" /> Clear
@@ -716,3 +949,4 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
     </AnimatePresence>
   );
 };
+

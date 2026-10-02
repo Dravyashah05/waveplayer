@@ -42,7 +42,9 @@ except Exception:
 
 PORT = int(os.environ.get("YTMUSIC_PY_PORT", "8002"))
 AUTH_DIR = os.environ.get("YT_AUTH_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth"))
-SHARED_SECRET = os.environ.get("YT_PY_SECRET", "")
+# Node gateway sends YTMUSIC_PY_SECRET; accept the legacy YT_PY_SECRET alias
+# so a production deploy setting either name actually hardens the service.
+SHARED_SECRET = os.environ.get("YTMUSIC_PY_SECRET", "") or os.environ.get("YT_PY_SECRET", "")
 MAX_BODY_BYTES = 64 * 1024
 ORDERS = {"a-z", "z-a", "recently_added"}
 
@@ -237,7 +239,7 @@ def _pass_section(section):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    mode = "secret" if SHARED_SECRET else "loopback-only (set YT_PY_SECRET to harden)"
+    mode = "secret" if SHARED_SECRET else "loopback-only (set YTMUSIC_PY_SECRET to harden)"
     print("[ytmusic-py] listening on 127.0.0.1:%d (%s), auth_dir=%s" % (PORT, mode, AUTH_DIR))
     try:
         server.serve_forever()

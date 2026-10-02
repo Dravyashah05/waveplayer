@@ -48,6 +48,7 @@ import { NoContent } from '../components/NoContent';
 import { SongContextMenu } from '../components/SongContextMenu';
 import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
 import { PlaylistModal, PlaylistModalValue } from '../components/PlaylistModal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { BulkActionBar } from '../components/BulkActionBar';
 import {
   LocalPlaylist,
@@ -159,6 +160,9 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
   const [youtubeMessage, setYoutubeMessage] = useState('');
   const [expandedYtId, setExpandedYtId] = useState<string | null>(null);
   const [ytItemsCache, setYtItemsCache] = useState<Record<string, YoutubeItem[]>>({});
+  // Per-playlist track errors: one failed playlist retries alone and never
+  // breaks the rest of the Library (Wave playlists always keep working).
+  const [ytItemErrors, setYtItemErrors] = useState<Record<string, string>>({});
   const [ytTracksLoading, setYtTracksLoading] = useState(false);
   const [previewPlaylist, setPreviewPlaylist] = useState<YouTubePlaylist | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -528,6 +532,12 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
     const cached = ytItemsCache[playlistId];
     if (cached) return cached;
     setYtTracksLoading(true);
+    setYtItemErrors((prev) => {
+      if (!prev[playlistId]) return prev;
+      const next = { ...prev };
+      delete next[playlistId];
+      return next;
+    });
     try {
       const { items } = await fetchAllYoutubeItems(playlistId);
       setYtItemsCache((prev) => ({ ...prev, [playlistId]: items }));
@@ -537,6 +547,8 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
         setYoutubeConnected(false);
         setYoutubeMessage(reauthMessage());
       }
+      // Isolated: only this playlist shows the retry state.
+      setYtItemErrors((prev) => ({ ...prev, [playlistId]: error?.message || 'Could not load tracks.' }));
       throw error;
     } finally {
       setYtTracksLoading(false);
@@ -635,12 +647,20 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
     }
   };
 
-  const handleDeletePlaylist = (id: string, plTitle: string, e: React.MouseEvent) => {
+  const [deleteTarget, setDeleteTarget] = useState<LocalPlaylist | null>(null);
+
+  const handleDeletePlaylist = (_id: string, _plTitle: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm(`Delete playlist "${plTitle}"?`)) return;
-    deleteLocalPlaylist(id);
+    const target = getLocalPlaylists().find((p) => p.id === _id) || null;
+    if (target) setDeleteTarget(target);
+  };
+
+  const confirmDeletePlaylist = () => {
+    if (!deleteTarget) return;
+    deleteLocalPlaylist(deleteTarget.id);
     setLocalPlaylists(getLocalPlaylists());
-    setToastMessage(`Deleted playlist "${plTitle}"`);
+    setToastMessage(`Deleted playlist "${deleteTarget.title}"`);
+    setDeleteTarget(null);
   };
 
   const handleRenamePlaylist = (value: PlaylistModalValue) => {
@@ -1243,29 +1263,47 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                 </div>
               </div>
 
-              {/* User Local Playlists */}
+              {/* Wave Playlists (device-local; always available, YT-independent) */}
               {localPlaylists.length > 0 && (
                 <div className="space-y-3">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-white/50 px-1">
-                    Your Playlists ({localPlaylists.length})
+                    Wave Playlists ({localPlaylists.length})
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {localPlaylists.map((pl) => (
+                    {localPlaylists
+                      .filter((pl) => {
+                        const q = searchQuery.trim().toLowerCase();
+                        if (!q) return true;
+                        return (
+                          pl.title.toLowerCase().includes(q) ||
+                          (pl.description || '').toLowerCase().includes(q)
+                        );
+                      })
+                      .map((pl) => (
                       <div
                         key={pl.id}
                         onClick={() => onNavigate?.('playlist', `local:${pl.id}`)}
                         className="group cursor-pointer rounded-[20px] border border-white/10 bg-white/[0.03] p-4 hover:bg-white/[0.07] hover:border-white/20 transition-all flex items-center gap-3.5 shadow-sm"
                       >
-                        <div className="h-16 w-16 rounded-[14px] bg-gradient-to-br from-white/15 to-white/5 border border-white/10 flex items-center justify-center text-white font-black text-lg shrink-0 group-hover:scale-105 transition-transform">
-                          {pl.title.slice(0, 2).toUpperCase()}
+                        <div className="h-16 w-16 rounded-[14px] bg-gradient-to-br from-white/15 to-white/5 border border-white/10 flex items-center justify-center text-white font-black text-lg shrink-0 group-hover:scale-105 transition-transform overflow-hidden">
+                          {pl.thumbnail || pl.songs?.[0]?.thumbnail ? (
+                            <img
+                              src={pl.thumbnail || pl.songs?.[0]?.thumbnail || ''}
+                              alt=""
+                              loading="lazy"
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            pl.title.slice(0, 2).toUpperCase()
+                          )}
                         </div>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-[14px] font-bold text-white group-hover:text-white">
                             {pl.title}
                           </p>
                           <p className="truncate text-xs text-white/50 mt-0.5">
-                            {(pl.songs || []).length} songs • {formatRelativeTime(pl.updatedAt)}
-                            {(pl.sourcePlaylistId || pl.youtubePlaylistId) ? ' • YouTube import' : ''}
+                            {(pl.songs || []).length} {(pl.songs || []).length === 1 ? 'song' : 'songs'} • {formatRelativeTime(pl.updatedAt)}
+                            {(pl.sourcePlaylistId || pl.youtubePlaylistId) ? ' • YouTube import' : ' • Wave'}
                           </p>
                         </div>
                         <div className="flex items-center gap-1">
@@ -1383,6 +1421,14 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                           </button>
                           <div className="flex items-center gap-1.5">
                             <button
+                              type="button"
+                              onClick={() => onNavigate?.('playlist', `youtube:${playlist.id}`)}
+                              className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/10"
+                              aria-label={`Open ${playlist.title}`}
+                            >
+                              Open
+                            </button>
+                            <button
                               onClick={async () => {
                                 try {
                                   const tracks = await getYoutubeTracks(playlist);
@@ -1407,7 +1453,20 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
 
                         {expanded && (
                           <div className="mt-2.5 max-h-60 overflow-y-auto divide-y divide-white/5 rounded-xl bg-black/40 p-1">
-                            {ytTracksLoading && items.length === 0 ? (
+                            {ytItemErrors[playlist.id] && items.length === 0 ? (
+                              <div className="flex items-center justify-between gap-2 px-3 py-2">
+                                <p role="alert" className="text-xs text-rose-300">
+                                  {ytItemErrors[playlist.id]} Nothing was changed.
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => void loadYoutubeItems(playlist.id).catch(() => {})}
+                                  className="shrink-0 rounded-full border border-white/15 px-3 py-1 text-xs font-semibold text-white hover:bg-white/10"
+                                >
+                                  Retry
+                                </button>
+                              </div>
+                            ) : ytTracksLoading && items.length === 0 ? (
                               <p className="px-3 py-2 text-xs text-white/45">Loading tracks…</p>
                             ) : items.length === 0 ? (
                               <p className="px-3 py-2 text-xs text-white/45">No tracks found.</p>
@@ -1874,6 +1933,16 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
         }}
       />
 
+      {/* Delete Playlist Confirmation */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title={`Delete “${deleteTarget?.title || 'playlist'}”?`}
+        body="The playlist and its order will be removed from this device. This cannot be undone."
+        confirmLabel="Delete playlist"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={confirmDeletePlaylist}
+      />
+
       {/* Rename Playlist Modal */}
       <PlaylistModal
         isOpen={!!renameTarget}
@@ -1896,7 +1965,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 30, scale: 0.95 }}
             transition={{ duration: 0.2 }}
-            className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
+            className="fixed bottom-[calc(112px+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
           >
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
             <span>{toastMessage}</span>
@@ -1906,3 +1975,4 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
     </div>
   );
 };
+

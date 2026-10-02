@@ -21,30 +21,22 @@ import {
   Headphones,
   Compass,
   Layers,
+  History,
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Track, Album, Playlist, SearchArtist } from '../types';
 import { playerStore } from '../services/playerStore';
-import { playerEngine, usePlayerEngine } from '../services/playerEngine';
-import { getSaavnBrowseModules, searchSaavnArtists, searchSaavnSongs } from '../services/saavnApi';
+import { playerEngine, requestResumePosition, usePlayerEngine } from '../services/playerEngine';
+import { fetchRadio, fetchSimilar } from '../services/recommendationApi';
+import { startRadioAndPlay } from '../services/radioEngine';
 import {
-  recommendTracks,
-  getSimilarTracks,
-  getDiscoverTracks,
-  ScoredTrack,
-} from '../services/recommendationEngine';
-import {
-  fetchQuickPicks,
-  fetchRadio,
-  fetchRecHome,
-  fetchForYou,
-  fetchDiscover,
-  HomeSections,
-} from '../services/recommendationApi';
-import { getProfile } from '../services/userProfile';
+  usePersonalizedHome,
+  type PersonalizedMix,
+  type BecauseSection,
+  type ContinueItem,
+} from '../hooks/usePersonalizedHome';
+import { TrackRail, RailSkeleton, GridSkeleton, formatResumeLabel } from '../components/HomeShelf';
 import { useGoogleAccount } from '../hooks/useGoogleAccount';
-import { getRecentlyPlayed, getListeningEvents } from '../services/listeningStore';
-import { formatRelativeTime } from '../services/libraryStore';
 import { SongContextMenu } from '../components/SongContextMenu';
 import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
 
@@ -72,17 +64,6 @@ function getDynamicGreeting(userName?: string | null): { greeting: string; capti
   const greeting = firstName ? `${timeGreeting}, ${firstName}` : timeGreeting;
 
   return { greeting, caption };
-}
-
-export interface PersonalizedMix {
-  id: string;
-  title: string;
-  subtitle: string;
-  description: string;
-  gradient: string;
-  badge: string;
-  tracks: Track[];
-  coverThumb?: string;
 }
 
 const FALLBACK_HITS: Track[] = [
@@ -173,28 +154,30 @@ export const HomePage: React.FC<{
 }> = ({ onPlay, onNavigate, history }) => {
   const { user } = useGoogleAccount();
   const { greeting, caption } = useMemo(() => getDynamicGreeting(user?.name), [user?.name]);
+  const reduceMotion = useReducedMotion();
 
-  // Loading & Refreshing States
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  // Personalized Home data layer (cached, per-section failure isolation).
+  const { data, status, loading, refreshing, refresh } = usePersonalizedHome();
   const [startingRadio, setStartingRadio] = useState(false);
+
+  const quickPicks = data?.quickPicks ?? [];
+  const madeForYou = data?.madeForYou ?? [];
+  const continueListening = data?.continueListening ?? [];
+  const becauseSections = data?.becauseSections ?? [];
+  const personalizedMixes = data?.mixes ?? [];
+  const discoverTracks = data?.discover ?? [];
+  const basedOnLibrary = data?.basedOnLibrary ?? { tracks: [], explanation: '' };
+  const trendingForYou = data?.trendingForYou ?? { tracks: [], label: 'Popular Now' };
+  const recentHistory = data?.recentHistory ?? [];
+  const recommendedAlbums = data?.albums ?? [];
+  const recommendedArtists = data?.artists ?? [];
+  const topPlaylists = data?.playlists ?? [];
+  const coldStart = data?.coldStart ?? false;
 
   // Player Store & Engine States
   const { isPlaying } = usePlayerEngine();
   const [currentTrack, setCurrentTrack] = useState<Track | null>(() => playerStore.current());
   const [favs, setFavs] = useState<Track[]>(() => playerStore.favsList());
-
-  // Recommendation Data Stores
-  const [quickPicks, setQuickPicks] = useState<Track[]>([]);
-  const [madeForYou, setMadeForYou] = useState<ScoredTrack[]>([]);
-  const [becauseSections, setBecauseSections] = useState<
-    Array<{ artist: string; seedTrack: Track; tracks: Track[] }>
-  >([]);
-  const [discoverTracks, setDiscoverTracks] = useState<Track[]>([]);
-  const [recommendedAlbums, setRecommendedAlbums] = useState<Album[]>([]);
-  const [recommendedArtists, setRecommendedArtists] = useState<SearchArtist[]>([]);
-  const [topPlaylists, setTopPlaylists] = useState<Playlist[]>([]);
-  const [personalizedMixes, setPersonalizedMixes] = useState<PersonalizedMix[]>([]);
 
   // Modals & Toast
   const [menuTrack, setMenuTrack] = useState<Track | null>(null);
@@ -221,259 +204,22 @@ export const HomePage: React.FC<{
     };
   }, []);
 
-  // Main Data Fetcher
-  const loadHomeRecommendations = useCallback(async (isManualRefresh = false) => {
-    if (isManualRefresh) setRefreshing(true);
-    else setLoading(true);
-
-    try {
-      const profile = getProfile();
-      const hist = playerStore.historyList();
-      const currentFavs = playerStore.favsList();
-      const recentListening = getRecentlyPlayed(30);
-
-      // Seed pool selection
-      const seedPool = [
-        hist[0] || currentFavs[0] || recentListening[0],
-        hist[1] || currentFavs[1] || recentListening[1],
-        hist[2] || currentFavs[2] || recentListening[2],
-      ]
-        .filter((t, i, a): t is Track => !!t && !!t.id && a.findIndex((x) => x && x.id === t.id) === i)
-        .slice(0, 3);
-      const primarySeed = seedPool[0] || null;
-
-      // 1. Fetch Backend Quick Picks & Home Sections
-      const [backendQP, backendHome, backendForYou, backendDiscover, saavnBrowse] = await Promise.all([
-        fetchQuickPicks(12).catch(() => null),
-        fetchRecHome().catch(() => null),
-        fetchForYou().catch(() => [] as Track[]),
-        fetchDiscover().catch(() => [] as Track[]),
-        getSaavnBrowseModules().catch(() => ({
-          trending: [] as Track[],
-          topPlaylists: [] as Playlist[],
-          newAlbums: [] as Album[],
-          charts: [] as Playlist[],
-        })),
-      ]);
-
-      // Process Quick Picks
-      let qpResults: Track[] = [];
-      if (backendQP && backendQP.length > 0) {
-        qpResults = backendQP;
-      } else {
-        const localQP = await recommendTracks({
-          seedTrack: primarySeed,
-          limit: 12,
-          weights: { taste: 0.4, similarity: 0.25, collaborative: 0.15, popularity: 0.1, discovery: 0.1 },
-        }).catch(() => [] as ScoredTrack[]);
-        qpResults = localQP.length ? localQP : (saavnBrowse.trending?.slice(0, 12) || FALLBACK_HITS);
-      }
-      setQuickPicks(qpResults.slice(0, 12));
-
-      // Process Made For You
-      let forYouResults: ScoredTrack[] = [];
-      if (backendForYou && backendForYou.length > 0) {
-        forYouResults = backendForYou.map((t) => ({
-          ...t,
-          _score: 0.9,
-          _reasons: ['Picked for your taste', 'YouTube Music Recommendation'],
-        }));
-      } else {
-        forYouResults = await recommendTracks({
-          seedTracks: seedPool,
-          limit: 16,
-        }).catch(() => [] as ScoredTrack[]);
-      }
-      setMadeForYou(forYouResults.slice(0, 16));
-
-      // Process Discover Something New
-      let discResults: Track[] = [];
-      if (backendDiscover && backendDiscover.length > 0) {
-        discResults = backendDiscover;
-      } else {
-        const excludeSet = new Set([
-          ...(primarySeed ? [primarySeed.id] : []),
-          ...hist.slice(0, 10).map((t) => t.id),
-        ]);
-        discResults = await getDiscoverTracks(profile, excludeSet, 12).catch(() => [] as Track[]);
-      }
-      setDiscoverTracks(discResults.slice(0, 12));
-
-      // 2. Process "Because You Listen To [Artist]" Sections
-      const topArtists = Object.entries(profile.artists || {})
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 2)
-        .map(([name]) => name);
-
-      const dynamicBecause: Array<{ artist: string; seedTrack: Track; tracks: Track[] }> = [];
-
-      for (const artistName of topArtists) {
-        const matchingTrack =
-          hist.find((t) => t.author?.toLowerCase().includes(artistName.toLowerCase())) ||
-          currentFavs.find((t) => t.author?.toLowerCase().includes(artistName.toLowerCase())) ||
-          qpResults.find((t) => t.author?.toLowerCase().includes(artistName.toLowerCase()));
-
-        if (matchingTrack) {
-          const similar = await getSimilarTracks(matchingTrack.id, 10).catch(() => [] as Track[]);
-          if (similar.length) {
-            dynamicBecause.push({
-              artist: artistName,
-              seedTrack: matchingTrack,
-              tracks: similar,
-            });
-          }
-        }
-      }
-
-      // If no history artists, use primary seed
-      if (dynamicBecause.length === 0 && primarySeed) {
-        const seedArtist = primarySeed.author?.split(',')[0]?.trim() || primarySeed.author;
-        const similar = await getSimilarTracks(primarySeed.id, 10).catch(() => [] as Track[]);
-        if (similar.length) {
-          dynamicBecause.push({
-            artist: seedArtist,
-            seedTrack: primarySeed,
-            tracks: similar,
-          });
-        }
-      }
-      setBecauseSections(dynamicBecause);
-
-      // 3. Generate Personalized Mixes ("Your Mix")
-      const allCandidateTracks = [
-        ...qpResults,
-        ...forYouResults,
-        ...discResults,
-        ...currentFavs,
-        ...hist,
-      ];
-      const seenMixIds = new Set<string>();
-      const dedupedMixPool = allCandidateTracks.filter((t) => {
-        if (!t?.id || seenMixIds.has(t.id)) return false;
-        seenMixIds.add(t.id);
-        return true;
-      });
-
-      const mixes: PersonalizedMix[] = [
-        {
-          id: 'my-supermix',
-          title: 'My Supermix',
-          subtitle: 'Endless personalized mix',
-          description: 'A signature blend of your current favorites, recent replays, and fresh discoveries.',
-          gradient: 'from-amber-500 via-rose-600 to-purple-800',
-          badge: 'SUPERMIX',
-          tracks: dedupedMixPool.slice(0, 25),
-          coverThumb: qpResults[0]?.thumbnail || dedupedMixPool[0]?.thumbnail,
-        },
-        {
-          id: 'chill-mix',
-          title: 'Chill Mix',
-          subtitle: 'Relax & unwind',
-          description: 'Mellow melodies, acoustic sounds, and relaxing rhythms tailored to your taste.',
-          gradient: 'from-cyan-600 via-teal-700 to-slate-900',
-          badge: 'CHILL',
-          tracks: dedupedMixPool
-            .filter((t) => {
-              const str = (t.title + ' ' + (t.albumName || '')).toLowerCase();
-              return str.includes('lofi') || str.includes('chill') || str.includes('acoustic') || str.includes('love') || str.includes('slow');
-            })
-            .concat(dedupedMixPool.slice(5, 20))
-            .slice(0, 20),
-          coverThumb: dedupedMixPool[2]?.thumbnail,
-        },
-        {
-          id: 'energy-mix',
-          title: 'Energy Mix',
-          subtitle: 'High tempo & upbeat',
-          description: 'Electrifying beats, powerhouse anthems, and high-energy bangers to fuel your day.',
-          gradient: 'from-orange-500 via-red-600 to-pink-700',
-          badge: 'ENERGY',
-          tracks: dedupedMixPool
-            .filter((t) => {
-              const str = (t.title + ' ' + (t.albumName || '')).toLowerCase();
-              return str.includes('dance') || str.includes('party') || str.includes('remix') || str.includes('bass') || str.includes('workout');
-            })
-            .concat(dedupedMixPool.slice(10, 25))
-            .slice(0, 20),
-          coverThumb: dedupedMixPool[4]?.thumbnail,
-        },
-        {
-          id: 'focus-mix',
-          title: 'Focus Mix',
-          subtitle: 'Deep focus & flow',
-          description: 'Smooth instrumentals, melodic atmospheres, and deep concentration soundscapes.',
-          gradient: 'from-violet-600 via-indigo-700 to-zinc-950',
-          badge: 'FOCUS',
-          tracks: dedupedMixPool.slice(8, 28),
-          coverThumb: dedupedMixPool[6]?.thumbnail,
-        },
-        {
-          id: 'discovery-mix',
-          title: 'Discover Mix',
-          subtitle: 'New music for you',
-          description: 'Emerging artists, fresh releases, and songs outside your regular rotation.',
-          gradient: 'from-emerald-500 via-teal-600 to-cyan-900',
-          badge: 'DISCOVERY',
-          tracks: discResults.length ? discResults : dedupedMixPool.slice(12, 30),
-          coverThumb: discResults[0]?.thumbnail || dedupedMixPool[1]?.thumbnail,
-        },
-      ];
-      setPersonalizedMixes(mixes);
-
-      // 4. Extract Recommended Albums
-      const albumsList: Album[] = [];
-      if (saavnBrowse.newAlbums && saavnBrowse.newAlbums.length) {
-        albumsList.push(...saavnBrowse.newAlbums);
-      }
-      setRecommendedAlbums(albumsList.slice(0, 8));
-
-      // 5. Extract Recommended Artists
-      const artistQuery = topArtists[0] || (primarySeed?.author?.split(',')[0]?.trim()) || 'Arijit Singh';
-      const saavnArtists = await searchSaavnArtists(artistQuery).catch(() => ({ total: 0, artists: [] as SearchArtist[] }));
-      if (saavnArtists.artists && saavnArtists.artists.length) {
-        setRecommendedArtists(saavnArtists.artists.slice(0, 8));
-      }
-
-      // 6. Playlists
-      if (saavnBrowse.topPlaylists && saavnBrowse.topPlaylists.length) {
-        setTopPlaylists(saavnBrowse.topPlaylists.slice(0, 8));
-      }
-    } catch (err) {
-      console.warn('[HomePage] recommendation fetch error:', err);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  // Initial Load & Profile Sync
-  useEffect(() => {
-    void loadHomeRecommendations();
-    const handleProfileChange = () => {
-      void loadHomeRecommendations();
-    };
-    window.addEventListener('wave:profile', handleProfileChange);
-    return () => {
-      window.removeEventListener('wave:profile', handleProfileChange);
-    };
-  }, [loadHomeRecommendations]);
-
-  // Start Radio Action
+  // Start Radio Action (smart session radio: personalized or track-seeded)
   const handleStartPersonalizedRadio = async (seed?: Track | null) => {
     if (startingRadio) return;
     setStartingRadio(true);
-    const targetSeed = seed || quickPicks[0] || madeForYou[0] || history[0] || FALLBACK_HITS[0];
     try {
-      setToastMessage(`Starting Radio for "${targetSeed.title}"...`);
-      const radioTracks = await fetchRadio(targetSeed, 25);
-      if (radioTracks && radioTracks.length) {
-        onPlay(radioTracks[0], radioTracks);
+      if (seed) {
+        setToastMessage(`Starting Radio for "${seed.title}"...`);
+        await startRadioAndPlay('track', { track: seed });
       } else {
-        const fallback = await getSimilarTracks(targetSeed.id, 20);
-        onPlay(fallback[0] || targetSeed, fallback.length ? fallback : [targetSeed]);
+        const targetSeed = quickPicks[0] || madeForYou[0] || history[0] || FALLBACK_HITS[0];
+        setToastMessage('Starting Your Radio...');
+        await startRadioAndPlay('personalized', { track: targetSeed });
       }
     } catch {
-      onPlay(targetSeed, [targetSeed]);
+      const targetSeed = seed || quickPicks[0] || FALLBACK_HITS[0];
+      if (targetSeed) onPlay(targetSeed, [targetSeed]);
     } finally {
       setStartingRadio(false);
     }
@@ -516,16 +262,14 @@ export const HomePage: React.FC<{
     setIsPlaylistModalOpen(true);
   };
 
-  const recentHistory = useMemo(() => {
-    const fromListening = getRecentlyPlayed(20);
-    const pool = fromListening.length ? fromListening : history;
-    const seen = new Set<string>();
-    return pool.filter((t) => {
-      if (!t?.id || seen.has(t.id)) return false;
-      seen.add(t.id);
-      return true;
-    }).slice(0, 10);
-  }, [history]);
+  // Resume a partially-heard track near its previous position (engine
+  // honors it through the existing pendingSeek path; falls back to normal
+  // start when unavailable).
+  const handleResumeTrack = (item: ContinueItem, list: Track[]) => {
+    requestResumePosition(item.track.id, item.positionSeconds);
+    onPlay(item.track, list);
+    setToastMessage(`Resuming "${item.track.title}"`);
+  };
 
   return (
     <div className="space-y-8 sm:space-y-10 pb-24">
@@ -537,7 +281,7 @@ export const HomePage: React.FC<{
               {greeting}
             </h1>
             <button
-              onClick={() => void loadHomeRecommendations(true)}
+              onClick={() => void refresh(true)}
               disabled={refreshing}
               className={`flex h-8 w-8 items-center justify-center rounded-full bg-white/[0.06] border border-white/10 text-white/70 hover:text-white hover:bg-white/[0.12] active:scale-95 transition-all ${
                 refreshing ? 'animate-spin text-white' : ''
@@ -575,34 +319,34 @@ export const HomePage: React.FC<{
         </div>
       </div>
 
-      {/* ——— SKELETON LOADING STATE ——— */}
-      {loading && !refreshing ? (
-        <div className="space-y-8 animate-pulse">
-          {/* Quick Picks Skeleton */}
-          <div className="space-y-3">
-            <div className="h-6 w-36 bg-white/10 rounded-full" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              {[...Array(8)].map((_, i) => (
-                <div key={i} className="h-16 rounded-2xl bg-white/[0.04] border border-white/5" />
-              ))}
-            </div>
-          </div>
-          {/* Rails Skeleton */}
-          <div className="space-y-3">
-            <div className="h-6 w-44 bg-white/10 rounded-full" />
-            <div className="flex gap-4 overflow-hidden">
-              {[...Array(6)].map((_, i) => (
-                <div key={i} className="min-w-[160px] w-[160px] h-48 rounded-[20px] bg-white/[0.04] border border-white/5 shrink-0" />
-              ))}
-            </div>
-          </div>
+      {/* Sections render progressively with per-section skeletons (shell first). */}
+      {/* Failed sections hide individually — a banner offers one-tap retry. */}
+      {Object.values(status).some((s) => s === 'error') && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-500/20 bg-amber-500/[0.07] px-4 py-2.5" role="alert">
+          <p className="text-xs font-medium text-amber-200/90">
+            Some sections couldn&apos;t load. Your music and playback are unaffected.
+          </p>
+          <button
+            type="button"
+            onClick={() => void refresh(true)}
+            disabled={refreshing}
+            className="rounded-full bg-white px-4 py-1.5 text-xs font-bold text-black hover:bg-white/90 disabled:opacity-40"
+          >
+            {refreshing ? 'Retrying…' : 'Retry'}
+          </button>
         </div>
-      ) : (
-        <>
+      )}
+      <>
           {/* ======================================================= */}
           {/* 1. QUICK PICKS (PROMINENT COMPACT GRID) */}
           {/* ======================================================= */}
-          {quickPicks.length > 0 && (
+          {status.quickPicks === 'loading' && quickPicks.length === 0 ? (
+            <div className="space-y-3.5">
+              <div className="h-6 w-36 bg-white/10 rounded-full animate-pulse" />
+              <GridSkeleton cards={8} />
+            </div>
+          ) : (
+            quickPicks.length > 0 && (
             <div className="space-y-3.5">
               <RailHeader
                 title="Quick Picks"
@@ -620,8 +364,8 @@ export const HomePage: React.FC<{
                   return (
                     <motion.div
                       key={`qp-${track.id}-${idx}`}
-                      whileHover={{ scale: 1.01 }}
-                      whileTap={{ scale: 0.99 }}
+                      whileHover={reduceMotion ? undefined : { scale: 1.01 }}
+                      whileTap={reduceMotion ? undefined : { scale: 0.99 }}
                       onClick={() => handlePlaySong(track, quickPicks)}
                       className={`group relative flex items-center gap-3 p-2.5 rounded-[18px] border transition-all cursor-pointer select-none backdrop-blur-md ${
                         isActive
@@ -681,7 +425,7 @@ export const HomePage: React.FC<{
                           className={`flex h-7 w-7 items-center justify-center rounded-full transition-all ${
                             isFav
                               ? 'text-red-400 opacity-100 scale-100'
-                              : 'text-white/40 hover:text-white opacity-0 group-hover:opacity-100'
+                              : 'text-white/40 hover:text-white opacity-0 group-hover:opacity-100 max-sm:opacity-100'
                           }`}
                           aria-label="Like song"
                         >
@@ -690,7 +434,7 @@ export const HomePage: React.FC<{
                         <button
                           type="button"
                           onClick={(e) => handleOpenContextMenu(track, e)}
-                          className="flex h-7 w-7 items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-all"
+                          className="flex h-7 w-7 items-center justify-center rounded-full text-white/40 hover:text-white hover:bg-white/10 opacity-0 group-hover:opacity-100 max-sm:opacity-100 transition-all"
                           aria-label="More options"
                         >
                           <MoreVertical className="h-3.5 w-3.5" />
@@ -701,171 +445,27 @@ export const HomePage: React.FC<{
                 })}
               </div>
             </div>
+            )
           )}
 
           {/* ======================================================= */}
-          {/* 2. YOUR MIX (PERSONALIZED MIX CARDS) */}
+          {/* 2. MADE FOR YOU (PERSONALIZED SELECTION) */}
           {/* ======================================================= */}
-          {personalizedMixes.length > 0 && (
+          {status.madeForYou === 'loading' && madeForYou.length === 0 ? (
+            <div className="space-y-3.5">
+              <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+              <RailSkeleton />
+            </div>
+          ) : (
+            madeForYou.length > 0 && (
             <div className="space-y-3.5">
               <RailHeader
-                title="Your Mix"
-                subtitle="Personalized mixes updated for your taste"
-                icon={<Sparkles className="h-3.5 w-3.5 text-amber-400" />}
-                actionText="Play Supermix"
-                onAction={() => personalizedMixes[0] && handlePlayAll(personalizedMixes[0].tracks)}
-              />
-              <div className="flex gap-3.5 sm:gap-4 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-none snap-x snap-mandatory">
-                {personalizedMixes.map((mix) => (
-                  <motion.div
-                    key={mix.id}
-                    whileHover={{ y: -4 }}
-                    onClick={() => handlePlayAll(mix.tracks)}
-                    className="snap-start group cursor-pointer min-w-[190px] w-[190px] sm:min-w-[215px] sm:w-[215px] shrink-0 rounded-[24px] border border-white/10 bg-white/[0.03] p-3.5 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-[0_8px_24px_rgba(0,0,0,0.3)] backdrop-blur-md flex flex-col justify-between"
-                  >
-                    <div className={`relative aspect-square w-full rounded-[18px] overflow-hidden bg-gradient-to-br ${mix.gradient} shadow-md p-4 flex flex-col justify-between`}>
-                      <div className="flex items-center justify-between">
-                        <span className="rounded-full bg-black/40 backdrop-blur px-2.5 py-0.5 text-[10px] font-black tracking-wider text-white border border-white/15">
-                          {mix.badge}
-                        </span>
-                        <span className="h-7 w-7 rounded-full bg-white/20 backdrop-blur flex items-center justify-center text-white">
-                          <Headphones className="h-3.5 w-3.5" />
-                        </span>
-                      </div>
-
-                      <div>
-                        <h3 className="text-[17px] sm:text-[19px] font-black text-white leading-tight tracking-tight drop-shadow">
-                          {mix.title}
-                        </h3>
-                        <p className="text-[11px] font-medium text-white/80 mt-0.5 line-clamp-1">
-                          {mix.subtitle}
-                        </p>
-                      </div>
-
-                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black shadow-2xl transform scale-90 group-hover:scale-100 transition-transform">
-                          <Play className="h-5 w-5 fill-current ml-0.5" />
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="mt-3">
-                      <p className="text-xs text-white/60 line-clamp-2 leading-relaxed font-medium">
-                        {mix.description}
-                      </p>
-                      <p className="text-[11px] font-mono text-white/40 mt-1.5">
-                        {mix.tracks.length} tracks
-                      </p>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ======================================================= */}
-          {/* 3. RECENTLY PLAYED (HORIZONTAL RAIL) */}
-          {/* ======================================================= */}
-          {recentHistory.length > 0 && (
-            <div className="space-y-3.5">
-              <RailHeader
-                title="Recently Played"
-                subtitle="Pick up right where you left off"
-                icon={<Clock3 className="h-3.5 w-3.5 text-cyan-400" />}
-                actionText="See library"
-                onAction={() => onNavigate?.('library', 'recent')}
-              />
-              <div className="flex gap-3.5 sm:gap-4 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-none snap-x snap-mandatory">
-                {recentHistory.map((track) => (
-                  <div
-                    key={`rec-hist-${track.id}`}
-                    onClick={() => handlePlaySong(track, recentHistory)}
-                    className="snap-start group cursor-pointer min-w-[145px] w-[145px] sm:min-w-[165px] sm:w-[165px] shrink-0"
-                  >
-                    <div className="relative aspect-square overflow-hidden rounded-[20px] bg-[#18181b] ring-1 ring-white/10 shadow-[0_8px_20px_rgba(0,0,0,0.4)]">
-                      <img
-                        src={track.thumbnail}
-                        alt={track.title}
-                        loading="lazy"
-                        className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <div className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
-                          <Play className="h-4 w-4 fill-current ml-0.5" />
-                        </div>
-                      </div>
-                      <span className="absolute bottom-2 left-2 rounded-full bg-black/70 backdrop-blur border border-white/10 px-2 py-0.5 text-[9.5px] font-bold text-white">
-                        Recent
-                      </span>
-                    </div>
-                    <p className="truncate text-[13px] sm:text-[13.5px] font-bold text-white mt-2 leading-tight group-hover:text-cyan-300 transition-colors">
-                      {track.title}
-                    </p>
-                    <p className="truncate text-xs font-medium text-[#8e8e93] mt-0.5">
-                      {track.author}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ======================================================= */}
-          {/* 4. BECAUSE YOU LISTEN TO [ARTIST] (DYNAMIC SECTIONS) */}
-          {/* ======================================================= */}
-          {becauseSections.map((section) => (
-            <div key={`because-${section.artist}`} className="space-y-3.5">
-              <RailHeader
-                title={`Because you listen to ${section.artist}`}
-                subtitle={`Similar tracks & top hits from ${section.artist}`}
-                icon={<Heart className="h-3.5 w-3.5 text-rose-400" />}
-                actionText="Play All"
-                onAction={() => handlePlayAll(section.tracks)}
-                action2Text="Radio"
-                onAction2={() => handleStartPersonalizedRadio(section.seedTrack)}
-              />
-              <div className="flex gap-3.5 sm:gap-4 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-none snap-x snap-mandatory">
-                {section.tracks.map((track) => (
-                  <div
-                    key={`because-item-${track.id}`}
-                    onClick={() => handlePlaySong(track, section.tracks)}
-                    className="snap-start group cursor-pointer min-w-[150px] w-[150px] sm:min-w-[170px] sm:w-[170px] shrink-0"
-                  >
-                    <div className="relative aspect-square overflow-hidden rounded-[20px] bg-[#18181b] ring-1 ring-white/10 shadow-md">
-                      <img
-                        src={track.thumbnail}
-                        alt={track.title}
-                        loading="lazy"
-                        className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <div className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
-                          <Play className="h-4 w-4 fill-current ml-0.5" />
-                        </div>
-                      </div>
-                    </div>
-                    <p className="truncate text-[13px] sm:text-[13.5px] font-bold text-white mt-2 leading-tight group-hover:text-rose-300 transition-colors">
-                      {track.title}
-                    </p>
-                    <p className="truncate text-xs font-medium text-[#8e8e93] mt-0.5">
-                      {track.author}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-
-          {/* ======================================================= */}
-          {/* 5. MADE FOR YOU (PERSONALIZED HYBRID SELECTION) */}
-          {/* ======================================================= */}
-          {madeForYou.length > 0 && (
-            <div className="space-y-3.5">
-              <RailHeader
-                title="Made For You"
-                subtitle="Deep recommendations tuned to your taste profile"
+                title={coldStart ? 'Recommended To Get Started' : 'Made For You'}
+                subtitle={
+                  coldStart
+                    ? 'Popular tracks to begin exploring'
+                    : 'Deep recommendations tuned to your taste profile'
+                }
                 icon={<Sparkles className="h-3.5 w-3.5 text-amber-400" />}
                 actionText="Play All"
                 onAction={() => handlePlayAll(madeForYou)}
@@ -911,60 +511,248 @@ export const HomePage: React.FC<{
                 })}
               </div>
             </div>
+            )
           )}
 
           {/* ======================================================= */}
-          {/* 6. DISCOVER SOMETHING NEW (FRESH ARTISTS & GENRES) */}
+          {/* 3. CONTINUE LISTENING (RESUME UNFINISHED TRACKS) */}
           {/* ======================================================= */}
-          {discoverTracks.length > 0 && (
+          {continueListening.length > 0 && (
             <div className="space-y-3.5">
               <RailHeader
-                title="Discover Something New"
-                subtitle="Fresh tracks and related artists beyond your usual rotation"
-                icon={<Compass className="h-3.5 w-3.5 text-emerald-400" />}
+                title="Continue Listening"
+                subtitle="Pick up where you left off"
+                icon={<History className="h-3.5 w-3.5 text-sky-400" />}
                 actionText="Play All"
-                onAction={() => handlePlayAll(discoverTracks)}
+                onAction={() => handlePlayAll(continueListening.map((c) => c.track))}
               />
-              <div className="flex gap-3.5 sm:gap-4 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-none snap-x snap-mandatory">
-                {discoverTracks.map((track) => (
-                  <div
-                    key={`disc-${track.id}`}
-                    onClick={() => handlePlaySong(track, discoverTracks)}
-                    className="snap-start group cursor-pointer min-w-[150px] w-[150px] sm:min-w-[170px] sm:w-[170px] shrink-0"
-                  >
-                    <div className="relative aspect-square overflow-hidden rounded-[20px] bg-[#18181b] ring-1 ring-white/10 shadow-md">
-                      <img
-                        src={track.thumbnail}
-                        alt={track.title}
-                        loading="lazy"
-                        className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                        referrerPolicy="no-referrer"
-                      />
-                      <span className="absolute top-2 left-2 rounded-full bg-emerald-500 text-black px-2 py-0.5 text-[9.5px] font-black uppercase tracking-wider shadow">
-                        New
-                      </span>
-                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <div className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
-                          <Play className="h-4 w-4 fill-current ml-0.5" />
-                        </div>
-                      </div>
-                    </div>
-                    <p className="truncate text-[13px] sm:text-[13.5px] font-bold text-white mt-2 leading-tight group-hover:text-emerald-300 transition-colors">
-                      {track.title}
-                    </p>
-                    <p className="truncate text-xs font-medium text-[#8e8e93] mt-0.5">
-                      {track.author}
-                    </p>
-                  </div>
-                ))}
-              </div>
+              <TrackRail
+                items={continueListening.map((c) => ({
+                  track: c.track,
+                  context: continueListening.map((x) => x.track),
+                  badge: 'Resume',
+                  progressFraction: c.completionFraction,
+                  resumeLabel: formatResumeLabel(c.positionSeconds),
+                }))}
+                currentTrackId={currentTrack?.id}
+                onPlay={(t, list) => {
+                  const item = continueListening.find((c) => c.track.id === t.id);
+                  if (item) handleResumeTrack(item, list);
+                  else handlePlaySong(t, list);
+                }}
+                onOpenMenu={handleOpenContextMenu}
+              />
             </div>
           )}
 
           {/* ======================================================= */}
-          {/* 7. RECOMMENDED ALBUMS */}
+          {/* 5. YOUR MIX (PERSONALIZED MIX CARDS) */}
           {/* ======================================================= */}
-          {recommendedAlbums.length > 0 && (
+          {status.mixes === 'loading' && personalizedMixes.length === 0 ? (
+            <div className="space-y-3.5">
+              <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+              <RailSkeleton />
+            </div>
+          ) : (
+            personalizedMixes.length > 0 && (
+            <div className="space-y-3.5">
+              <RailHeader
+                title="Your Mix"
+                subtitle="Personalized mixes updated for your taste"
+                icon={<Sparkles className="h-3.5 w-3.5 text-amber-400" />}
+                actionText="Play Supermix"
+                onAction={() => personalizedMixes[0] && handlePlayAll(personalizedMixes[0].tracks)}
+              />
+              <div className="flex gap-3.5 sm:gap-4 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-none snap-x snap-mandatory">
+                {personalizedMixes.map((mix) => (
+                  <motion.div
+                    key={mix.id}
+                    whileHover={reduceMotion ? undefined : { y: -4 }}
+                    onClick={() => handlePlayAll(mix.tracks)}
+                    className="snap-start group cursor-pointer min-w-[190px] w-[190px] sm:min-w-[215px] sm:w-[215px] shrink-0 rounded-[24px] border border-white/10 bg-white/[0.03] p-3.5 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-[0_8px_24px_rgba(0,0,0,0.3)] backdrop-blur-md flex flex-col justify-between"
+                  >
+                    <div className={`relative aspect-square w-full rounded-[18px] overflow-hidden bg-gradient-to-br ${mix.gradient} shadow-md p-4 flex flex-col justify-between`}>
+                      <div className="flex items-center justify-between">
+                        <span className="rounded-full bg-black/40 backdrop-blur px-2.5 py-0.5 text-[10px] font-black tracking-wider text-white border border-white/15">
+                          {mix.badge}
+                        </span>
+                        <span className="h-7 w-7 rounded-full bg-white/20 backdrop-blur flex items-center justify-center text-white">
+                          <Headphones className="h-3.5 w-3.5" />
+                        </span>
+                      </div>
+
+                      <div>
+                        <h3 className="text-[17px] sm:text-[19px] font-black text-white leading-tight tracking-tight drop-shadow">
+                          {mix.title}
+                        </h3>
+                        <p className="text-[11px] font-medium text-white/80 mt-0.5 line-clamp-1">
+                          {mix.subtitle}
+                        </p>
+                      </div>
+
+                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black shadow-2xl transform scale-90 group-hover:scale-100 transition-transform">
+                          <Play className="h-5 w-5 fill-current ml-0.5" />
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-3">
+                      <p className="text-xs text-white/60 line-clamp-2 leading-relaxed font-medium">
+                        {mix.description}
+                      </p>
+                      <p className="text-[11px] font-mono text-white/40 mt-1.5">
+                        {mix.tracks.length} tracks
+                      </p>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+            )
+          )}
+
+          {/* ======================================================= */}
+          {/* 9. RECENTLY PLAYED (UNIFIED WAVE + YT MUSIC HISTORY) */}
+          {/* ======================================================= */}
+          {status.recent === 'loading' && recentHistory.length === 0 ? (
+            <div className="space-y-3.5">
+              <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+              <RailSkeleton />
+            </div>
+          ) : (
+            recentHistory.length > 0 && (
+            <div className="space-y-3.5">
+              <RailHeader
+                title="Recently Played"
+                subtitle="Pick up right where you left off"
+                icon={<Clock3 className="h-3.5 w-3.5 text-cyan-400" />}
+                actionText="See all"
+                onAction={() => onNavigate?.('history')}
+              />
+              <TrackRail
+                items={recentHistory.map((track) => ({ track, context: recentHistory, badge: 'Recent' }))}
+                currentTrackId={currentTrack?.id}
+                onPlay={handlePlaySong}
+                onOpenMenu={handleOpenContextMenu}
+              />
+            </div>
+            )
+          )}
+
+          {/* ======================================================= */}
+          {/* 4. BECAUSE YOU LISTEN TO [ARTIST] (DYNAMIC SECTIONS) */}
+          {/* ======================================================= */}
+          {becauseSections.map((section) => (
+            <div key={`because-${section.artist}`} className="space-y-3.5">
+              <RailHeader
+                title={`Because you listen to ${section.artist}`}
+                subtitle={section.reason || `Similar tracks & top hits from ${section.artist}`}
+                icon={<Heart className="h-3.5 w-3.5 text-rose-400" />}
+                actionText="Play All"
+                onAction={() => handlePlayAll(section.tracks)}
+                action2Text="Radio"
+                onAction2={() => handleStartPersonalizedRadio(section.seedTrack)}
+              />
+              <TrackRail
+                items={section.tracks.map((track) => ({ track, context: section.tracks }))}
+                currentTrackId={currentTrack?.id}
+                onPlay={handlePlaySong}
+                onOpenMenu={handleOpenContextMenu}
+              />
+            </div>
+          ))}
+
+          {/* ======================================================= */}
+          {/* 6. DISCOVER SOMETHING NEW (FRESH ARTISTS & GENRES) */}
+          {/* ======================================================= */}
+          {status.discover === 'loading' && discoverTracks.length === 0 ? (
+            <div className="space-y-3.5">
+              <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+              <RailSkeleton />
+            </div>
+          ) : (
+            discoverTracks.length > 0 && (
+            <div className="space-y-3.5">
+              <RailHeader
+                title={coldStart ? 'Explore Music' : 'Discover Something New'}
+                subtitle={
+                  coldStart
+                    ? 'Fresh tracks across genres to start exploring'
+                    : 'Fresh tracks and related artists beyond your usual rotation'
+                }
+                icon={<Compass className="h-3.5 w-3.5 text-emerald-400" />}
+                actionText="Play All"
+                onAction={() => handlePlayAll(discoverTracks)}
+              />
+              <TrackRail
+                items={discoverTracks.map((track) => ({ track, context: discoverTracks, badge: 'New' }))}
+                currentTrackId={currentTrack?.id}
+                onPlay={handlePlaySong}
+                onOpenMenu={handleOpenContextMenu}
+              />
+            </div>
+            )
+          )}
+
+          {/* ======================================================= */}
+          {/* 7. BASED ON YOUR LIBRARY (YT MUSIC + WAVE SIGNALS) */}
+          {/* ======================================================= */}
+          {basedOnLibrary.tracks.length > 0 && (
+            <div className="space-y-3.5">
+              <RailHeader
+                title="Based On Your Library"
+                subtitle={basedOnLibrary.explanation || 'Inspired by artists you saved'}
+                icon={<Layers className="h-3.5 w-3.5 text-violet-400" />}
+                actionText="Play All"
+                onAction={() => handlePlayAll(basedOnLibrary.tracks)}
+                action2Text="Radio"
+                onAction2={() => handleStartPersonalizedRadio(basedOnLibrary.tracks[0])}
+              />
+              <TrackRail
+                items={basedOnLibrary.tracks.map((track) => ({ track, context: basedOnLibrary.tracks }))}
+                currentTrackId={currentTrack?.id}
+                onPlay={handlePlaySong}
+                onOpenMenu={handleOpenContextMenu}
+              />
+            </div>
+          )}
+
+          {/* ======================================================= */}
+          {/* 8. TRENDING FOR YOU (TASTE-FILTERED POPULARITY) */}
+          {/* ======================================================= */}
+          {trendingForYou.tracks.length > 0 && (
+            <div className="space-y-3.5">
+              <RailHeader
+                title={trendingForYou.label}
+                subtitle={
+                  coldStart
+                    ? 'What everyone is listening to right now'
+                    : 'Popular tracks filtered through your taste'
+                }
+                icon={<TrendingUp className="h-3.5 w-3.5 text-orange-400" />}
+                actionText="Play All"
+                onAction={() => handlePlayAll(trendingForYou.tracks)}
+              />
+              <TrackRail
+                items={trendingForYou.tracks.map((track) => ({ track, context: trendingForYou.tracks }))}
+                currentTrackId={currentTrack?.id}
+                onPlay={handlePlaySong}
+                onOpenMenu={handleOpenContextMenu}
+              />
+            </div>
+          )}
+
+          {/* ======================================================= */}
+          {/* 10. RECOMMENDED ALBUMS */}
+          {/* ======================================================= */}
+          {status.albums === 'loading' && recommendedAlbums.length === 0 ? (
+            <div className="space-y-3.5">
+              <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+              <RailSkeleton />
+            </div>
+          ) : (
+            recommendedAlbums.length > 0 && (
             <div className="space-y-3.5">
               <RailHeader
                 title="Recommended Albums"
@@ -1007,12 +795,19 @@ export const HomePage: React.FC<{
                 ))}
               </div>
             </div>
+            )
           )}
 
           {/* ======================================================= */}
-          {/* 8. RECOMMENDED ARTISTS (CIRCULAR AVATARS) */}
+          {/* 11. RECOMMENDED ARTISTS (CIRCULAR AVATARS) */}
           {/* ======================================================= */}
-          {recommendedArtists.length > 0 && (
+          {status.artists === 'loading' && recommendedArtists.length === 0 ? (
+            <div className="space-y-3.5">
+              <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+              <RailSkeleton />
+            </div>
+          ) : (
+            recommendedArtists.length > 0 && (
             <div className="space-y-3.5">
               <RailHeader
                 title="Recommended Artists"
@@ -1046,10 +841,11 @@ export const HomePage: React.FC<{
                 ))}
               </div>
             </div>
+            )
           )}
 
           {/* ======================================================= */}
-          {/* 9. PERSONALIZED RADIO BANNER */}
+          {/* 12. PERSONALIZED RADIO BANNER */}
           {/* ======================================================= */}
           <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-r from-purple-900/40 via-indigo-900/30 to-black/80 p-6 sm:p-8 backdrop-blur-xl shadow-[0_16px_40px_rgba(79,70,229,0.15)]">
             <div className="flex flex-col sm:flex-row items-center justify-between gap-5">
@@ -1083,9 +879,15 @@ export const HomePage: React.FC<{
           </div>
 
           {/* ======================================================= */}
-          {/* 10. CURATED PLAYLISTS */}
+          {/* 13. CURATED PLAYLISTS */}
           {/* ======================================================= */}
-          {topPlaylists.length > 0 && (
+          {status.playlists === 'loading' && topPlaylists.length === 0 ? (
+            <div className="space-y-3.5">
+              <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+              <RailSkeleton />
+            </div>
+          ) : (
+            topPlaylists.length > 0 && (
             <div className="space-y-3.5">
               <RailHeader
                 title="Curated Playlists"
@@ -1125,9 +927,9 @@ export const HomePage: React.FC<{
                 ))}
               </div>
             </div>
+            )
           )}
         </>
-      )}
 
       {/* Song Context Menu (⋮) */}
       <SongContextMenu
@@ -1166,7 +968,7 @@ export const HomePage: React.FC<{
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 30, scale: 0.95 }}
             transition={{ duration: 0.2 }}
-            className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
+            className="fixed bottom-[calc(112px+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
           >
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
             <span>{toastMessage}</span>
@@ -1176,3 +978,4 @@ export const HomePage: React.FC<{
     </div>
   );
 };
+

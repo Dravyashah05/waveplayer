@@ -28,6 +28,21 @@ import { Track, Playlist } from '../types';
 import { getSaavnPlaylistDetails, searchSaavnPlaylists } from '../services/saavnApi';
 import { getYTMusicPlaylistDetails } from '../services/ytmusicLibrary';
 import { fetchRadio } from '../services/recommendationApi';
+import { startRadioAndPlay } from '../services/radioEngine';
+import { getYoutubeCapability, getYoutubePlaylistDetail, removeVideoFromYoutubePlaylist, isInsufficientScope as isYtScopeError, type YoutubeCapability } from '../services/youtubePlaylists';
+import {
+  applyImportDecisions,
+  buildExportPreview,
+  createWavePlaylistFromMatches,
+  executeExport,
+  previewYoutubeImport,
+  type ExportPreview,
+} from '../services/playlistTransfer';
+import { fetchAllYoutubeItems } from '../services/youtubeImport';
+import type { ImportPreview } from '../services/youtubeImport';
+import { recommendTracks } from '../services/recommendationEngine';
+import { cachePlaylistMeta, invalidatePlaylistCache } from '../services/playlistModel';
+import { PlaylistTransferModal } from '../components/PlaylistTransferModal';
 import { playerStore } from '../services/playerStore';
 import {
   LocalPlaylist,
@@ -43,6 +58,8 @@ import { SongRow } from '../components/SongRow';
 import { SongContextMenu } from '../components/SongContextMenu';
 import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
 import { PlaylistModal, PlaylistModalValue } from '../components/PlaylistModal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { useDismiss } from '../hooks/useDismiss';
 import { NoContent } from '../components/NoContent';
 import { toast } from '../components/Toast';
 
@@ -66,9 +83,10 @@ const SORT_LABELS: Array<{ id: SortMode; label: string }> = [
   { id: 'year_desc', label: 'Newest first' },
 ];
 
-const isLocalRef = (id: string | undefined) => !!id && id.startsWith('local:');
-const localIdOf = (id: string) => id.slice('local:'.length);
+const isLocalRef = (id: string | undefined) => !!id && (id.startsWith('local:') || id.startsWith('wave:'));
+const localIdOf = (id: string) => id.replace(/^(local|wave):/, '');
 const isYtmusicRef = (id: string | undefined) => !!id && id.startsWith('ytmusic:');
+const isYoutubeRef = (id: string | undefined) => !!id && id.startsWith('youtube:');
 const sortKeyOf = (id: string) => `wave:playlist:sort:${id}`;
 
 function sourceBadge(source?: string, youtubeId?: string) {
@@ -100,12 +118,26 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
   const [editOpen, setEditOpen] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+  useDismiss(moreOpen, moreRef, () => setMoreOpen(false));
   const [radioTracks, setRadioTracks] = useState<Track[]>([]);
   const [radioLoading, setRadioLoading] = useState(false);
+  const [continueTracks, setContinueTracks] = useState<Track[]>([]);
+  const [ytCap, setYtCap] = useState<YoutubeCapability | null>(null);
+  const [isYoutubeMine, setIsYoutubeMine] = useState(false);
+  const [ytItemIds, setYtItemIds] = useState<Record<string, string>>({});
+  const [transferMode, setTransferMode] = useState<'export' | 'import' | null>(null);
+  const [exportPreview, setExportPreview] = useState<ExportPreview | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferProgress, setTransferProgress] = useState('');
+  const [transferError, setTransferError] = useState('');
   const searchTimer = useRef<number | null>(null);
 
   const currentPlayingId = playerStore.current()?.id;
   const isLocal = isLocalRef(playlistId);
+  // Wave rename/reorder/delete stay Wave-only; YouTube edits are limited to
+  // per-track remove behind the manage scope (rename/reorder live on YouTube).
   const canEdit = !!localPl;
 
   // Debounced in-playlist search (client-side only — never refetches).
@@ -129,6 +161,7 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
       setSelected(new Set());
       setReorderMode(false);
       if (isLocalRef(playlistId)) loadLocalPlaylist(localIdOf(playlistId));
+      else if (isYoutubeRef(playlistId)) loadYoutubePlaylist(playlistId);
       else if (isYtmusicRef(playlistId)) loadYTMusicPlaylist(playlistId);
       else loadPlaylist(playlistId);
     } else {
@@ -184,6 +217,41 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
     }
   };
 
+  // Authenticated YouTube playlist detail (user-scoped, per-user cache).
+  // Read-only sessions stay read-only: write actions hide via ytCap.
+  // One failed playlist never breaks the rest of the app — error is local.
+  const loadYoutubePlaylist = async (id: string) => {
+    setLoading(true);
+    setLoadError('');
+    setLocalPl(null);
+    setIsYoutubeMine(false);
+    try {
+      const cap = await getYoutubeCapability().catch(() => ({ connected: false, canWrite: false, scopes: [] as string[] }));
+      setYtCap(cap);
+      const unified = await getYoutubePlaylistDetail(id, cap);
+      setIsYoutubeMine(true);
+      setYtItemIds(unified.itemIds || {});
+      setPlaylist({
+        playlistId: unified.sourceId || id.replace(/^youtube:/, ''),
+        name: unified.title,
+        author: unified.owner || 'YouTube',
+        thumbnails: unified.artwork ? [{ url: unified.artwork, width: 0, height: 0 }] : [],
+        videoCount: unified.trackCount,
+        type: 'PLAYLIST',
+        description: unified.description || '',
+        source: 'ytmusic',
+      });
+      setTracks(unified.tracks || []);
+      try {
+        cachePlaylistMeta(unified);
+      } catch { /* cache is best-effort */ }
+    } catch {
+      setLoadError('Could not load this YouTube playlist. Check the connection or reconnect YouTube, then retry.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // YT Music playlist detail (existing Express /api/ytmusic/* endpoints).
   // Tracks reuse the shared detail UI + playerStore/playerEngine playback.
   const loadYTMusicPlaylist = async (id: string) => {
@@ -217,6 +285,31 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
       setLoading(false);
     }
   };
+
+  // Continue Playlist: next-up recommendations from playlist seeds.
+  // Skipped when the playlist has insufficient data (<3 tracks) — never
+  // fabricated. Uses the existing recommendation engine only.
+  useEffect(() => {
+    if (!playlistId || loading || tracks.length < 3) {
+      setContinueTracks([]);
+      return;
+    }
+    let cancelled = false;
+    const seeds = tracks.slice(0, 3);
+    recommendTracks({ seedTracks: seeds, limit: 8 })
+      .then((scored) => {
+        if (cancelled) return;
+        const ids = new Set(tracks.map((t) => t.id));
+        setContinueTracks(scored.filter((t) => t?.id && !ids.has(t.id)).slice(0, 8));
+      })
+      .catch(() => {
+        if (!cancelled) setContinueTracks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playlistId, loading, tracks.length]);
 
   // Playlist radio + More Like This (central recommendation engine).
   useEffect(() => {
@@ -333,14 +426,136 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
 
   const handleStartRadio = async () => {
     if (!visibleTracks.length) return;
-    const list = radioTracks.length ? [visibleTracks[0], ...radioTracks.filter((t) => t.id !== visibleTracks[0].id)] : null;
-    if (list) {
-      onPlay(list[0], list);
+    try {
+      await startRadioAndPlay(
+        'playlist',
+        {
+          track: visibleTracks[0],
+          playlistId: playlist?.playlistId || (localPl as any)?.id,
+          contextTracks: visibleTracks,
+        },
+        { contextTracks: visibleTracks },
+      );
+    } catch {
+      toast.error('Radio is unavailable right now');
+    }
+  };
+
+  // --- Explicit import / export (no background sync, user confirms) ---
+
+  const openExportPreview = () => {
+    if (!tracks.length) {
+      toast.error('Nothing to export yet');
       return;
     }
-    const fresh = await fetchRadio(visibleTracks[0], 15).catch(() => [] as Track[]);
-    if (fresh.length) onPlay(fresh[0], fresh);
-    else toast.error('Radio is unavailable right now');
+    setTransferError('');
+    setExportPreview(buildExportPreview(tracks));
+    setImportPreview(null);
+    setTransferMode('export');
+  };
+
+  const confirmExport = async (confirmed: { track: Track; videoId: string }[]) => {
+    setTransferBusy(true);
+    setTransferError('');
+    setTransferProgress(`Creating playlist (0/${confirmed.length})…`);
+    try {
+      const name = localPl?.title || playlist?.name || 'Wave playlist';
+      const result = await executeExport(
+        { title: name, description: localPl?.description || playlist?.description || '' },
+        confirmed.map((c) => ({ track: c.track, videoId: c.videoId, tier: 'matched' as const, confidence: 1, reason: 'confirmed' })),
+        (added, total) => setTransferProgress(`Adding tracks (${added}/${total})…`),
+      );
+      if (result.insufficientScope) {
+        setTransferError('YouTube is read-only for this account. Reconnect with playlist access to export.');
+        return;
+      }
+      if (!result.playlistId) {
+        setTransferError('YouTube did not create the playlist. Nothing was changed — please retry.');
+        return;
+      }
+      try {
+        invalidatePlaylistCache(result.playlistId);
+      } catch {}
+      setTransferMode(null);
+      toast.success(
+        result.failed.length
+          ? `Exported ${result.added} of ${confirmed.length} tracks (${result.failed.length} failed)`
+          : `Exported ${result.added} tracks to YouTube Music`,
+      );
+    } catch {
+      setTransferError('Export failed. The YouTube playlist may be incomplete — retry to continue.');
+    } finally {
+      setTransferBusy(false);
+      setTransferProgress('');
+    }
+  };
+
+  const openImportPreview = async () => {
+    if (!tracks.length) {
+      toast.error('Nothing to import yet');
+      return;
+    }
+    setTransferBusy(true);
+    setTransferError('');
+    setTransferProgress('Matching tracks…');
+    try {
+      // Authenticated YouTube items carry positions; catalog playlists fall
+      // back to the visible tracklist as pseudo-items (order-preserving).
+      let items;
+      if (isYoutubeMine && playlistId) {
+        const fetched = await fetchAllYoutubeItems(playlistId.replace(/^youtube:/, ''));
+        items = fetched.items;
+      } else {
+        items = tracks.map((t, i) => ({
+          id: `local-${i}`,
+          videoId: /^[a-zA-Z0-9_-]{11}$/.test(t.id) ? t.id : null,
+          title: t.title,
+          artist: t.author,
+          channelTitle: t.author,
+          thumbnail: t.thumbnail,
+          position: i,
+          publishedAt: null,
+          status: 'private',
+        }));
+      }
+      const preview = await previewYoutubeImport(items);
+      setImportPreview(preview);
+      setExportPreview(null);
+      setTransferMode('import');
+    } catch {
+      setTransferError('Could not build the import preview. Check your connection and retry.');
+      setTransferMode('import');
+      setImportPreview({ matched: [], possible: [], unmatched: [] });
+    } finally {
+      setTransferBusy(false);
+      setTransferProgress('');
+    }
+  };
+
+  const confirmImport = (acceptedPossible: Set<number>, includeUnmatched: boolean) => {
+    if (!importPreview) return;
+    setTransferBusy(true);
+    try {
+      const matches = applyImportDecisions(importPreview, { acceptedPossible, includeUnmatched });
+      const name = playlist?.name || localPl?.title || 'Imported playlist';
+      const created = createWavePlaylistFromMatches(
+        {
+          id: (playlist?.playlistId || localPl?.id || `import-${Date.now()}`).replace(/^(ytmusic|youtube|local):/, ''),
+          title: name,
+          description: playlist?.description || '',
+          thumbnail: playlist?.thumbnails?.[0]?.url || tracks[0]?.thumbnail || '',
+        },
+        matches,
+      );
+      try {
+        invalidatePlaylistCache();
+      } catch {}
+      setTransferMode(null);
+      toast.success(`Imported ${created.added} songs to “${created.title}”`);
+      onNavigate?.('playlist', `local:${created.id}`);
+    } finally {
+      setTransferBusy(false);
+    }
   };
 
   const handleShare = async () => {
@@ -379,9 +594,11 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
     }
   };
 
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmBulkRemove, setConfirmBulkRemove] = useState(false);
+
   const handleDelete = () => {
     if (!localPl) return;
-    if (!window.confirm(`Delete “${localPl.title}”? This cannot be undone.`)) return;
     deleteLocalPlaylist(localPl.id);
     toast.success('Playlist deleted');
     if (onBack) onBack();
@@ -389,6 +606,33 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
   };
 
   const handleRemoveTrack = (track: Track) => {
+    // YouTube remove: real DELETE behind the manage scope, with per-track
+    // truth — failures report honestly and keep the row in place.
+    if (!localPl && isYoutubeMine && ytCap?.canWrite) {
+      const itemId = ytItemIds[track.id];
+      if (!itemId) {
+        toast.error('Could not remove that video from YouTube');
+        return;
+      }
+      const pid = (playlistId || '').replace(/^youtube:/, '');
+      removeVideoFromYoutubePlaylist(pid, itemId)
+        .then(() => {
+          setTracks((prev) => prev.filter((t) => t.id !== track.id));
+          setYtItemIds((prev) => {
+            const next = { ...prev };
+            delete next[track.id];
+            return next;
+          });
+          try {
+            invalidatePlaylistCache(playlistId || '');
+          } catch {}
+          toast.success('Removed from YouTube playlist');
+        })
+        .catch((e) => {
+          toast.error(isYtScopeError(e) ? 'YouTube is read-only for this account' : 'Could not remove that video');
+        });
+      return;
+    }
     if (!localPl) return;
     if (removeTrackFromPlaylist(localPl.id, track.id)) {
       const next = getLocalPlaylists().find((p) => p.id === localPl.id) || null;
@@ -566,7 +810,13 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
         <div className="flex gap-2 pt-1">
           <button
             type="button"
-            onClick={() => (isLocal ? loadLocalPlaylist(localIdOf(playlistId || '')) : loadPlaylist(playlistId || ''))}
+            onClick={() => {
+              const id = playlistId || '';
+              if (isLocal) loadLocalPlaylist(localIdOf(id));
+              else if (isYoutubeRef(id)) loadYoutubePlaylist(id);
+              else if (isYtmusicRef(id)) loadYTMusicPlaylist(id);
+              else loadPlaylist(id);
+            }}
             className="rounded-full bg-white px-5 py-2 text-xs font-bold text-black"
           >
             Retry
@@ -639,6 +889,12 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
               {hero?.owner}
             </p>
 
+            {isYoutubeMine && ytCap && !ytCap.canWrite && (
+              <p className="mt-2 text-[11px] font-semibold text-white/45" role="note">
+                Read-only — this YouTube account has not granted playlist access. Connect with playlist
+                access to edit or export.
+              </p>
+            )}
             <div className="mt-3 flex flex-wrap items-center justify-center sm:justify-start gap-2 text-[12px] text-white/70">
               <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.08] px-2.5 py-0.5 border border-white/[0.08]">
                 <Music2 className="h-3 w-3" /> {tracks.length} {tracks.length === 1 ? 'song' : 'songs'}
@@ -694,7 +950,7 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
                   <LibraryBig className="h-4 w-4" /> <span className="hidden sm:inline">Add to Library</span>
                 </button>
               )}
-              <div className="relative">
+              <div className="relative" ref={moreRef}>
                 <button
                   type="button"
                   onClick={() => setMoreOpen((v) => !v)}
@@ -717,12 +973,22 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
                       <button type="button" onClick={() => { setMoreOpen(false); void handleStartRadio(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white hover:text-black">
                         <Radio className="h-4 w-4" /> Start playlist radio
                       </button>
-                      {canEdit && (
+                      {(isLocal || (isYoutubeMine && ytCap?.connected)) && (
+                        <button type="button" onClick={() => { setMoreOpen(false); void openImportPreview(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white hover:text-black">
+                          <ListPlus className="h-4 w-4" /> Import to Wave…
+                        </button>
+                      )}
+                      {isLocal && (
+                        <button type="button" onClick={() => { setMoreOpen(false); openExportPreview(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white hover:text-black">
+                          <Share2 className="h-4 w-4" /> Export to YouTube Music…
+                        </button>
+                      )}
+                      {!!localPl && (
                         <>
                           <button type="button" onClick={() => { setMoreOpen(false); setEditOpen(true); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white hover:text-black">
                             <Pencil className="h-4 w-4" /> Rename / edit
                           </button>
-                          <button type="button" onClick={() => { setMoreOpen(false); handleDelete(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-rose-300 hover:bg-rose-500 hover:text-white">
+                          <button type="button" onClick={() => { setMoreOpen(false); setConfirmDelete(true); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium text-rose-300 hover:bg-rose-500 hover:text-white">
                             <Trash2 className="h-4 w-4" /> Delete playlist
                           </button>
                         </>
@@ -774,7 +1040,7 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
           >
             {selectMode ? 'Done' : 'Select'}
           </button>
-          {canEdit && (
+          {!!localPl && (
             <button
               type="button"
               onClick={() => setReorderMode((v) => !v)}
@@ -803,8 +1069,8 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
             <button type="button" onClick={bulkQueue} className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3.5 py-1.5 text-xs font-semibold text-white/85 hover:bg-white hover:text-black"><ListPlus className="h-3 w-3" /> Queue</button>
             <button type="button" onClick={() => setPickerOpen(true)} className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3.5 py-1.5 text-xs font-semibold text-white/85 hover:bg-white hover:text-black"><Plus className="h-3 w-3" /> Playlist</button>
             <button type="button" onClick={bulkLike} className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3.5 py-1.5 text-xs font-semibold text-white/85 hover:bg-white hover:text-black"><Heart className="h-3 w-3" /> Like</button>
-            {canEdit && (
-              <button type="button" onClick={bulkRemove} className="inline-flex items-center gap-1.5 rounded-full border border-rose-500/30 px-3.5 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500 hover:text-white"><Trash2 className="h-3 w-3" /> Remove</button>
+            {!!localPl && (
+              <button type="button" onClick={() => setConfirmBulkRemove(true)} className="inline-flex items-center gap-1.5 rounded-full border border-rose-500/30 px-3.5 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500 hover:text-white"><Trash2 className="h-3 w-3" /> Remove</button>
             )}
           </motion.div>
         )}
@@ -938,6 +1204,51 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
         </div>
       )}
 
+      {/* Continue Playlist (recommendation engine, needs ≥3 tracks) */}
+      {continueTracks.length > 0 && (
+        <section aria-label="Continue playlist" className="space-y-3">
+          <div className="flex items-center gap-2">
+            <ListPlus className="h-3.5 w-3.5 text-emerald-400" />
+            <h2 className="text-[15px] font-bold tracking-[-0.01em] text-white">Continue Playlist</h2>
+          </div>
+          <p className="-mt-2 text-[12px] text-white/45">
+            Recommended next songs based on this playlist
+          </p>
+          <div className="divide-y divide-white/[0.04] rounded-2xl border border-white/[0.06] bg-white/[0.02]">
+            {continueTracks.map((t, i) => (
+              <SongRow
+                key={`continue-${t.id}`}
+                track={t}
+                index={i}
+                isActive={currentPlayingId === t.id}
+                onPlay={() => onPlay(t, continueTracks)}
+                onNavigate={onNavigate}
+                onOpenMenu={handleOpenMenu}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <PlaylistTransferModal
+        isOpen={transferMode !== null}
+        mode={transferMode === 'export' ? 'export' : 'import'}
+        title={localPl?.title || playlist?.name || 'Playlist'}
+        exportPreview={exportPreview}
+        importPreview={importPreview}
+        busy={transferBusy}
+        progress={transferProgress}
+        error={transferError}
+        onClose={() => {
+          if (!transferBusy) {
+            setTransferMode(null);
+            setTransferError('');
+          }
+        }}
+        onConfirmExport={(confirmed) => void confirmExport(confirmed)}
+        onConfirmImport={(accepted, include) => confirmImport(accepted, include)}
+      />
+
       <SongContextMenu
         isOpen={menuOpen}
         onClose={() => {
@@ -955,7 +1266,11 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
           setPickerTracks([t]);
           setPickerOpen(true);
         }}
-        onRemoveFromPlaylist={canEdit && menuTrack ? () => handleRemoveTrack(menuTrack) : undefined}
+        onRemoveFromPlaylist={
+          menuTrack && (localPl || (isYoutubeMine && ytCap?.canWrite))
+            ? () => handleRemoveTrack(menuTrack)
+            : undefined
+        }
         onNavigate={onNavigate}
         onShowToast={(msg) => toast.info(msg)}
       />
@@ -971,6 +1286,30 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
           toast.success(`Added ${count} song${count === 1 ? '' : 's'} to “${name}”`);
           setSelected(new Set());
           setSelectMode(false);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`Delete “${localPl?.title || 'playlist'}”?`}
+        body="The playlist and its order will be removed from this device. This cannot be undone."
+        confirmLabel="Delete playlist"
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => {
+          setConfirmDelete(false);
+          handleDelete();
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkRemove}
+        title={`Remove ${selectedTracks.length} song${selectedTracks.length === 1 ? '' : 's'}?`}
+        body="The selected songs will be removed from this playlist. This cannot be undone."
+        confirmLabel="Remove songs"
+        onCancel={() => setConfirmBulkRemove(false)}
+        onConfirm={() => {
+          setConfirmBulkRemove(false);
+          bulkRemove();
         }}
       />
 

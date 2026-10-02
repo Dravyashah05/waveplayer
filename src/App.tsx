@@ -1,22 +1,31 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { Suspense, lazy, useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X } from 'lucide-react';
+import { X, Loader2 } from 'lucide-react';
 import { WavePlayerNavbar } from './components/WavePlayerNavbar';
 import { PlayerBar } from './components/PlayerBar';
 import { QueueDrawer } from './components/QueueDrawer';
 import { ToastViewport } from './components/Toast';
+import { PwaChrome } from './components/PwaChrome';
+import { RouteBoundary } from './components/RouteBoundary';
 import { BottomNavigation } from './components/BottomNavigation';
+import { perfMark, perfMeasure } from './services/perf';
+// Critical shell stays eager (Home/Search + player chrome). Secondary pages
+// split into lazy chunks so first paint never waits for them.
 import { HomePage } from './pages/Home';
 import { SearchPage } from './pages/Search';
-import { LibraryPage } from './pages/Library';
-import { ArtistPage } from './pages/Artist';
-import { AlbumPage } from './pages/Album';
-import { PlaylistPage } from './pages/Playlist';
-import { SettingsPage } from './pages/Settings';
-import { ProfilePage } from './pages/Profile';
-import { ExplorePage } from './pages/Explore';
+const LibraryPage = lazy(() => import('./pages/Library').then((m) => ({ default: m.LibraryPage })));
+const ArtistPage = lazy(() => import('./pages/Artist').then((m) => ({ default: m.ArtistPage })));
+const AlbumPage = lazy(() => import('./pages/Album').then((m) => ({ default: m.AlbumPage })));
+const PlaylistPage = lazy(() => import('./pages/Playlist').then((m) => ({ default: m.PlaylistPage })));
+const NowPlayingPage = lazy(() => import('./pages/NowPlaying').then((m) => ({ default: m.NowPlayingPage })));
+const ExplorePage = lazy(() => import('./pages/Explore').then((m) => ({ default: m.ExplorePage })));
+const SettingsPage = lazy(() => import('./pages/Settings').then((m) => ({ default: m.SettingsPage })));
+const ProfilePage = lazy(() => import('./pages/Profile').then((m) => ({ default: m.ProfilePage })));
+import { usePlaybackShortcuts } from './hooks/usePlaybackShortcuts';
 import { ytmusicSuggestions } from './services/ytmusicApi';
 import { playerStore } from './services/playerStore';
+import { googleAccountStore } from './hooks/useGoogleAccount';
+import { ensureAccountIsolation } from './services/accountSync';
 import { startAutoplay } from './services/autoplay';
 import { startScrobbleService } from './services/scrobbleService';
 import { registerScrobbleProviders } from './services/scrobbleProviders';
@@ -24,14 +33,55 @@ import { startDiscordPresence } from './services/discordPresence';
 import { settingsStore } from './services/settingsStore';
 import { Track } from './types';
 
-type Page = 'discover' | 'explore' | 'search' | 'artist' | 'album' | 'playlist' | 'songs' | 'playlists' | 'albums' | 'artists' | 'all' | 'liked' | 'history' | 'settings' | 'profile';
+type Page = 'discover' | 'explore' | 'search' | 'artist' | 'album' | 'playlist' | 'nowplaying' | 'songs' | 'playlists' | 'albums' | 'artists' | 'all' | 'liked' | 'history' | 'settings' | 'profile';
 
 interface NavState {
   page: Page;
   param?: string;
 }
 
+const pageLoaders: Record<string, () => Promise<unknown>> = {
+  explore: () => import('./pages/Explore'),
+  playlists: () => import('./pages/Library'),
+  artist: () => import('./pages/Artist'),
+  album: () => import('./pages/Album'),
+  playlist: () => import('./pages/Playlist'),
+  nowplaying: () => import('./pages/NowPlaying'),
+  settings: () => import('./pages/Settings'),
+  profile: () => import('./pages/Profile'),
+};
+
+/**
+ * Warm a lazy page chunk on hover/focus of a major nav item. Never on
+ * startup, never more than once per page — data still loads on navigation.
+ */
+const prefetchedPages = new Set<string>();
+export function prefetchPage(page: string): void {
+  if (prefetchedPages.has(page)) return;
+  const load = pageLoaders[page];
+  if (!load) return;
+  prefetchedPages.add(page);
+  try {
+    const idle = (window as any).requestIdleCallback as ((cb: () => void) => void) | undefined;
+    if (typeof idle === 'function') idle(() => void load().catch(() => {}));
+    else void load().catch(() => {});
+  } catch { /* prefetch is best-effort */ }
+}
+
+function PageFallback() {
+  return (
+    <div className="flex min-h-[40vh] items-center justify-center" role="status" aria-label="Loading page">
+      <Loader2 className="h-6 w-6 animate-spin text-white/40" />
+    </div>
+  );
+}
+
 function AppContent() {
+  // First interactive paint of the shell (dev-only measurement).
+  useEffect(() => {
+    perfMark('shell:ready');
+    perfMeasure('startup', 'bootstrap', 'shell:ready');
+  }, []);
   const [query, setQuery] = useState('');
   const [queue, setQueue] = useState<Track[]>(() => playerStore.queue());
   const [currentIndex, setCurrentIndex] = useState(() => playerStore.currentIndex());
@@ -53,6 +103,15 @@ function AppContent() {
 
   // Smart autoplay: extend the queue before it runs dry (never touches the engine).
   useEffect(() => startAutoplay(), []);
+
+  // Account isolation: when the signed-in user changes, private caches are
+  // wiped before new data loads — stale data never leaks across accounts.
+  useEffect(() => googleAccountStore.subscribe(() => {
+    ensureAccountIsolation();
+  }), []);
+
+  // Transport shortcuts (Space/K, arrows, N/P) — engine-owned, typing-safe.
+  usePlaybackShortcuts(true);
 
   // Background services: scrobbling + presence listen to player events only.
   useEffect(() => {
@@ -207,7 +266,8 @@ function AppContent() {
   const removeFromQueue = (idx: number) => { playerStore.removeFromQueue(idx); };
   const playIndex = (i: number) => playerStore.setIndex(i);
 
-  const navigate = (p: Page, param?: string) => {
+  // Stable so memoized player chrome (MiniPlayer) skips unrelated re-renders.
+  const navigate = React.useCallback((p: Page, param?: string) => {
     if (p === 'settings') { setSettingsOpen(true); return; }
     if (p === 'profile') { setProfilePopupOpen(true); return; }
     setNavStack((prev) => {
@@ -221,7 +281,8 @@ function AppContent() {
     setPageParam(param || undefined);
     window.history.pushState({ page: p, param: param || undefined }, '', '');
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
+    perfMark(`nav:${p}`);
+  }, []);
 
   const goBack = () => {
     if (window.history.state?.page && navStack.length > 1) {
@@ -246,6 +307,7 @@ function AppContent() {
     if (page === 'artist') return <ArtistPage artistId={pageParam} onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} onBack={goBack} />;
     if (page === 'album') return <AlbumPage albumId={pageParam} onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} onBack={goBack} />;
     if (page === 'playlist') return <PlaylistPage playlistId={pageParam} onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} onBack={goBack} />;
+    if (page === 'nowplaying') return <NowPlayingPage onNavigate={(p, param) => navigate(p as Page, param)} onBack={goBack} onOpenQueue={() => setQueueOpen(true)} />;
     if (page === 'playlists') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="playlists" />;
     if (page === 'albums') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="albums" />;
     if (page === 'artists') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="artists" />;
@@ -332,7 +394,11 @@ function AppContent() {
                 exit={{ opacity: 0, y: -6 }}
                 transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
               >
-                {renderPage()}
+                <Suspense fallback={<PageFallback />}>
+                  <RouteBoundary pageKey={`${page}:${pageParam || ''}`}>
+                    {renderPage()}
+                  </RouteBoundary>
+                </Suspense>
               </motion.div>
             </AnimatePresence>
           </div>
@@ -424,9 +490,10 @@ function AppContent() {
         )}
       </AnimatePresence>
 
-      <PlayerBar onOpenQueue={() => setQueueOpen(true)} />
-      <BottomNavigation active={page} onChange={(p) => navigate(p as Page)} />
-      <QueueDrawer open={queueOpen} queue={queue} currentIndex={currentIndex} onClose={() => setQueueOpen(false)} onPlayIndex={playIndex} onClear={() => { playerStore.clearQueue(); setQueueOpen(false); }} onRemove={removeFromQueue} />
+      <PlayerBar onOpenQueue={() => setQueueOpen(true)} onOpenNowPlaying={React.useCallback(() => navigate('nowplaying'), [navigate])} />
+      <BottomNavigation active={page} onChange={(p) => navigate(p as Page)} onPrefetch={(p) => prefetchPage(p)} />
+      <QueueDrawer open={queueOpen} queue={queue} currentIndex={currentIndex} onClose={() => setQueueOpen(false)} onPlayIndex={playIndex} onClear={() => { playerStore.clearQueue(); setQueueOpen(false); }} onRemove={removeFromQueue} onNavigate={(p, param) => navigate(p as Page, param)} />
+      <PwaChrome />
       <ToastViewport />
     </div>
   );

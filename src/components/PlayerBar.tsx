@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Play,
@@ -14,6 +14,7 @@ import {
   Repeat,
   Repeat1,
   ListMusic,
+  Radio,
   Share2,
   ChevronDown,
   Download,
@@ -33,6 +34,7 @@ import { getSaavnLyrics } from '../services/saavnApi';
 import { LyricsView } from './LyricsView';
 import { MiniPlayer } from './MiniPlayer';
 import { playerStore } from '../services/playerStore';
+import { getActiveSession, subscribeRadio } from '../services/radioEngine';
 import { settingsStore } from '../services/settingsStore';
 import { playerEngine, usePlayerEngine } from '../services/playerEngine';
 import { StatsPanel } from './StatsPanel';
@@ -51,9 +53,11 @@ import {
 
 interface Props {
   onOpenQueue?: () => void;
+  /** Dedicated Now Playing page (MiniPlayer tap). Falls back to the overlay. */
+  onOpenNowPlaying?: () => void;
 }
 
-export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
+export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -125,6 +129,8 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
   const [shuffle, setShuffle] = useState(() => playerStore.shuffle);
   const [repeat, setRepeat] = useState(() => playerStore.repeat);
   const [queue, setQueue] = useState<Track[]>(() => playerStore.queue());
+  const [radioActive, setRadioActive] = useState(() => getActiveSession() !== null);
+  useEffect(() => subscribeRadio(() => setRadioActive(getActiveSession() !== null)), []);
   const [showFsLyrics, setShowFsLyrics] = useState(false);
   const [glassIntensity, setGlassIntensity] = useState(() => settingsStore.get().glassIntensity);
   const [glassEnabled, setGlassEnabled] = useState(() => settingsStore.get().glassEnabled);
@@ -239,8 +245,14 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
     };
   }, [track?.id]);
 
-  // Playback controls — thin wrappers over the engine (analytics live in engine/store)
-  const togglePlay = () => playerEngine.toggle();
+  // Playback controls — thin wrappers over the engine (analytics live in engine/store).
+  // Stable references so the memoized MiniPlayer skips progress-tick re-renders
+  // unless its own props actually changed.
+  const togglePlay = useCallback(() => playerEngine.toggle(), []);
+  const openPlayer = useCallback(
+    () => (onOpenNowPlaying ? onOpenNowPlaying() : setFullscreen(true)),
+    [onOpenNowPlaying],
+  );
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     playerEngine.setSeeking(false);
@@ -249,14 +261,14 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
   const seekBegin = () => playerEngine.setSeeking(true);
   const seekEnd = () => playerEngine.setSeeking(false);
 
-  const handleNext = () => playerEngine.next();
-  const handlePrev = () => playerEngine.prev();
+  const handleNext = useCallback(() => playerEngine.next(), []);
+  const handlePrev = useCallback(() => playerEngine.prev(), []);
 
-  const toggleFav = () => {
-    if (!track) return;
-    const next = playerStore.toggleFav(track);
-    setIsFav(next);
-  };
+  const toggleFav = useCallback(() => {
+    const cur = playerStore.current();
+    if (!cur) return;
+    setIsFav(playerStore.toggleFav(cur));
+  }, []);
 
   const handleRemove = () => {
     const idx = playerStore.currentIndex();
@@ -377,7 +389,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
         progress={progress}
         duration={effectiveDuration}
         isFav={isFav}
-        onOpen={() => setFullscreen(true)}
+        onOpen={openPlayer}
         onToggle={togglePlay}
         onNext={handleNext}
         onPrev={handlePrev}
@@ -430,6 +442,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
                   onClick={() => setFullscreen(false)}
                   className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black hover:bg-white/90 shadow-sm transition-all active:scale-95"
                   title="Close"
+                  aria-label="Close fullscreen player"
                 >
                   <ChevronDown className="h-5 w-5" />
                 </button>
@@ -449,8 +462,18 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
                   >
                     <MoreVertical className="h-4 w-4" />
                   </button>
-                  {menuOpen && (
-                    <div className="absolute right-0 top-[calc(100%+8px)] z-10 w-56 overflow-hidden rounded-2xl border border-white/10 bg-[#141416] py-2 shadow-[0_24px_64px_rgba(0,0,0,0.7)]">
+                    {menuOpen && (
+                      <div className="absolute right-0 top-[calc(100%+8px)] z-10 w-56 overflow-hidden rounded-2xl border border-white/10 bg-[#141416] py-2 shadow-[0_24px_64px_rgba(0,0,0,0.7)]">
+                      {onOpenNowPlaying && (
+                        <button
+                          type="button"
+                          onClick={() => { onOpenNowPlaying(); setMenuOpen(false); }}
+                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] font-medium text-white hover:bg-white/10 transition-colors"
+                        >
+                          <ListMusic className="h-4 w-4 shrink-0 text-white/60" />
+                          <span className="flex-1">Open Now Playing</span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => { toggleFav(); setMenuOpen(false); }}
@@ -656,9 +679,10 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
                 {/* dock — queue left, controls centered (stack-safe on narrow screens) */}
                 <div className="flex items-center justify-between gap-1.5 sm:gap-2">
                   <div className="flex items-center shrink-0">
-                    <button type="button" onClick={() => onOpenQueue?.()} className="h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center bg-white/10 border border-white/10 text-white hover:bg-white hover:text-black backdrop-blur relative" title={`Queue • ${queue.length}`}>
+                    <button type="button" onClick={() => onOpenQueue?.()} className="h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center bg-white/10 border border-white/10 text-white hover:bg-white hover:text-black backdrop-blur relative" title={`Queue • ${queue.length}${radioActive ? ' • Radio on' : ''}`}>
                       <ListMusic className="h-4 w-4" />
                       {queue.length > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-white text-black text-[10px] font-bold grid place-items-center ring-1 ring-black/10">{queue.length}</span>}
+                      {radioActive && <span className="absolute -bottom-0.5 -right-0.5 grid h-4 w-4 place-items-center rounded-full bg-white text-black ring-1 ring-black/20" title="Radio session active"><Radio className="h-2.5 w-2.5" /></span>}
                     </button>
                   </div>
                   <div className="flex items-center justify-center gap-1 sm:gap-1.5 min-w-0 flex-1">
@@ -667,6 +691,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
                       onClick={handlePrev}
                       className="h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center bg-white/10 border border-white/10 text-white hover:bg-white hover:text-black backdrop-blur transition-all active:scale-95 shrink-0"
                       title="Prev"
+                      aria-label="Previous track"
                     >
                       <SkipBack className="h-3.5 w-3.5 sm:h-4 sm:w-4 fill-current" />
                     </button>
@@ -675,6 +700,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
                       onClick={togglePlay}
                       className="h-10 w-10 sm:h-12 sm:w-12 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 shadow-[0_8px_20px_rgba(0,0,0,0.5)] transition-all shrink-0"
                       title={isPlaying ? 'Pause' : 'Play'}
+                      aria-label={isPlaying ? 'Pause' : 'Play'}
                     >
                       {isBuffering
                         ? <Loader2 className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" />
@@ -687,6 +713,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue }) => {
                       onClick={handleNext}
                       className="h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center bg-white/10 border border-white/10 text-white hover:bg-white hover:text-black backdrop-blur transition-all active:scale-95 shrink-0"
                       title="Next"
+                      aria-label="Next track"
                     >
                       <SkipForward className="h-3.5 w-3.5 sm:h-4 sm:w-4 fill-current" />
                     </button>

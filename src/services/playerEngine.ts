@@ -97,6 +97,18 @@ function fmtForLog(s: number): number {
   return Math.max(0, Math.round(s));
 }
 
+// Requested resume positions (Continue Listening). A requested position is
+// consumed on the next loadTrack of that track and flows through the
+// existing pendingSeek path both backends already honor — no transport
+// changes, no aggressive engine edits.
+const resumeRequests = new Map<string, number>();
+
+/** Ask the engine to start a track near a previous position (one-shot). */
+export function requestResumePosition(trackId: string, seconds: number): void {
+  if (!trackId || !(seconds > 1)) return;
+  resumeRequests.set(trackId, Math.floor(seconds));
+}
+
 /** Map a playback failure to a canonical technical-error kind (never taste). */
 function errorKindFor(message: string, streamSource?: string): TechnicalErrorKind {
   if (streamSource === 'youtube-audio' || streamSource === 'youtube-iframe') return 'YOUTUBE_STREAM_FAILED';
@@ -370,6 +382,11 @@ class PlayerEngine {
     this.hasPausedThisTrack = false;
     this.lastSeekLog = null;
     this.lastOutcomeTrackId = null;
+    const resumeAt = resumeRequests.get(track.id);
+    if (resumeAt !== undefined) {
+      resumeRequests.delete(track.id);
+      this.pendingSeek = resumeAt;
+    }
     this.failedIds.delete(track.id);
     this.set({
       trackId: track.id, backend: null, isPlaying: false,

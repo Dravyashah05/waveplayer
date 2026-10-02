@@ -26,6 +26,50 @@ export interface UnifiedSearchResults {
   albums: Album[];
   playlists: Playlist[];
   topResult?: TopResultItem | null;
+  /** Per-source health for the last completed run (partial-failure banner). */
+  sources?: { ytmusic: boolean; saavn: boolean };
+}
+
+/**
+ * Single tunable configuration for search aggregation.
+ * Budgets, ranking weights and suggestion limits live here — nowhere else.
+ */
+export const SEARCH_CONFIG = {
+  /** Max time one provider may delay the final merged results. */
+  providerBudgetMs: 8000,
+  /** Suggestion list size. */
+  suggestionLimit: 8,
+  ranking: {
+    exactTitle: 100,
+    titlePrefix: 40,
+    titleToken: 15,
+    authorToken: 18,
+    authorMatch: 35,
+    tasteMax: 15,
+    languageMatch: 6,
+    playCountMax: 8,
+    streamBonus: 5,
+  },
+} as const;
+
+let searchRun = 0;
+/** Start a new search run; late partials/finals from older runs are ignored. */
+export function nextSearchRun(): number {
+  searchRun += 1;
+  return searchRun;
+}
+export function isStaleRun(id: number): boolean {
+  return id !== searchRun;
+}
+
+function withBudget<T>(promise: Promise<T>, ms = SEARCH_CONFIG.providerBudgetMs): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('search-budget-exceeded')), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
 }
 
 const LS_RECENT = 'wave:recent_searches';
@@ -134,13 +178,14 @@ export function deduplicateArtists(artists: SearchArtist[]): SearchArtist[] {
 }
 
 /**
- * Deduplicates albums by normalized title + artist
+ * Deduplicates albums by normalized title + artist + year.
+ * Year keeps remasters/anniversary editions distinct across providers.
  */
 export function deduplicateAlbums(albums: Album[]): Album[] {
   const map = new Map<string, Album>();
   for (const al of albums) {
     if (!al || !al.name) continue;
-    const key = `${normalizeText(al.name)}__${normalizeText(al.artist?.name || '')}`;
+    const key = `${normalizeText(al.name)}__${normalizeText(al.artist?.name || '')}__${al.year || ''}`;
     if (!map.has(key)) {
       map.set(key, al);
     }
@@ -149,13 +194,14 @@ export function deduplicateAlbums(albums: Album[]): Album[] {
 }
 
 /**
- * Deduplicates playlists by normalized title
+ * Deduplicates playlists by normalized title + author.
+ * Author keeps different owners' same-titled playlists distinct.
  */
 export function deduplicatePlaylists(playlists: Playlist[]): Playlist[] {
   const map = new Map<string, Playlist>();
   for (const pl of playlists) {
     if (!pl || !pl.name) continue;
-    const key = normalizeText(pl.name);
+    const key = `${normalizeText(pl.name)}__${normalizeText(pl.author || '')}`;
     if (!map.has(key)) {
       map.set(key, pl);
     }
@@ -164,13 +210,71 @@ export function deduplicatePlaylists(playlists: Playlist[]): Playlist[] {
 }
 
 /**
- * Ranks tracks by search query relevance and user taste affinity
+ * Search Wave (device-local) playlists without any network. Returns
+ * provider-shaped Playlist entries with `local:` ids so the shared detail
+ * page, cards and top-result flows work unchanged. Private YouTube
+ * playlists are deliberately excluded here — they surface only in Library
+ * for the signed-in owner, never in global search.
+ */
+export function searchWavePlaylists(
+  query: string,
+  playlists: Array<{ id: string; title: string; description?: string; songs?: Array<{ id: string }> }>,
+): Playlist[] {
+  const normQ = normalizeText(query);
+  if (!normQ) return [];
+  const ranked = rankByName(
+    (playlists || []).filter((p) => p && typeof p.id === 'string'),
+    query,
+    (p) => `${p.title || ''} ${p.description || ''}`,
+  );
+  return ranked
+    .filter((p) => {
+      const hay = normalizeText(`${p.title || ''} ${p.description || ''}`);
+      return !!hay && normQ.split(' ').filter(Boolean).some((tok) => hay.includes(tok));
+    })
+    .slice(0, 6)
+    .map((p) => ({
+      playlistId: `local:${p.id}`,
+      name: p.title || 'Untitled Playlist',
+      author: 'Wave Player',
+      thumbnails: [],
+      videoCount: Array.isArray(p.songs) ? p.songs.length : 0,
+      type: 'PLAYLIST' as const,
+      description: p.description || '',
+    }));
+}
+
+/** Generic name-match ranking for artists/albums/playlists (provider order kept on ties). */
+export function rankByName<T>(items: T[], query: string, getName: (item: T) => string): T[] {
+  const normQ = normalizeText(query);
+  const qTokens = normQ.split(' ').filter(Boolean);
+  const scored = items.map((item, idx) => {
+    const norm = normalizeText(getName(item));
+    let score = 0;
+    if (norm === normQ) score += 100;
+    else if (norm.startsWith(normQ) || normQ.startsWith(norm)) score += 40;
+    for (const t of qTokens) {
+      if (norm.includes(t)) score += 10;
+    }
+    return { item, score, idx };
+  });
+  return scored
+    .sort((a, b) => b.score - a.score || a.idx - b.idx)
+    .map((s) => s.item);
+}
+
+/**
+ * Ranks tracks by fused relevance: string match + taste affinity +
+ * language match + provider popularity (play count) + stream availability.
+ * Weights live in SEARCH_CONFIG; no scores ever reach the UI.
  */
 export function rankTracks(tracks: Track[], query: string): Track[] {
   const normQ = normalizeText(query);
   const qTokens = normQ.split(' ').filter(Boolean);
   const profile = getProfile();
   const topArtists = profile.artists || {};
+  const favLang = (profile.favoriteLanguage || '').trim().toLowerCase();
+  const W = SEARCH_CONFIG.ranking;
 
   return [...tracks].sort((a, b) => {
     let scoreA = 0;
@@ -182,35 +286,47 @@ export function rankTracks(tracks: Track[], query: string): Track[] {
     const normAuthorB = normalizeText(b.author);
 
     // Exact title match
-    if (normTitleA === normQ) scoreA += 100;
-    if (normTitleB === normQ) scoreB += 100;
+    if (normTitleA === normQ) scoreA += W.exactTitle;
+    if (normTitleB === normQ) scoreB += W.exactTitle;
 
     // Title starts with query
-    if (normTitleA.startsWith(normQ)) scoreA += 40;
-    if (normTitleB.startsWith(normQ)) scoreB += 40;
+    if (normTitleA.startsWith(normQ)) scoreA += W.titlePrefix;
+    if (normTitleB.startsWith(normQ)) scoreB += W.titlePrefix;
 
     // Title token containment
     for (const t of qTokens) {
-      if (normTitleA.includes(t)) scoreA += 15;
-      if (normTitleB.includes(t)) scoreB += 15;
-      if (normAuthorA.includes(t)) scoreA += 18;
-      if (normAuthorB.includes(t)) scoreB += 18;
+      if (normTitleA.includes(t)) scoreA += W.titleToken;
+      if (normTitleB.includes(t)) scoreB += W.titleToken;
+      if (normAuthorA.includes(t)) scoreA += W.authorToken;
+      if (normAuthorB.includes(t)) scoreB += W.authorToken;
     }
 
     // Exact artist match
-    if (normAuthorA === normQ || normAuthorA.includes(normQ)) scoreA += 35;
-    if (normAuthorB === normQ || normAuthorB.includes(normQ)) scoreB += 35;
+    if (normAuthorA === normQ || normAuthorA.includes(normQ)) scoreA += W.authorMatch;
+    if (normAuthorB === normQ || normAuthorB.includes(normQ)) scoreB += W.authorMatch;
 
     // User taste boost
     for (const [artistName, weight] of Object.entries(topArtists)) {
       const normName = normalizeText(artistName);
-      if (normAuthorA.includes(normName)) scoreA += Math.min(15, weight * 3);
-      if (normAuthorB.includes(normName)) scoreB += Math.min(15, weight * 3);
+      if (normAuthorA.includes(normName)) scoreA += Math.min(W.tasteMax, (weight as number) * 3);
+      if (normAuthorB.includes(normName)) scoreB += Math.min(W.tasteMax, (weight as number) * 3);
     }
 
+    // Preferred-language match
+    if (favLang) {
+      if ((a.language || '').trim().toLowerCase() === favLang) scoreA += W.languageMatch;
+      if ((b.language || '').trim().toLowerCase() === favLang) scoreB += W.languageMatch;
+    }
+
+    // Provider popularity (log-scaled play count when the source supplies one)
+    const playsA = typeof a.playCount === 'number' && a.playCount > 0 ? Math.log10(a.playCount + 1) : 0;
+    const playsB = typeof b.playCount === 'number' && b.playCount > 0 ? Math.log10(b.playCount + 1) : 0;
+    scoreA += Math.min(W.playCountMax, playsA * 2);
+    scoreB += Math.min(W.playCountMax, playsB * 2);
+
     // Source fidelity
-    if (a.streamUrl || a.source === 'saavn') scoreA += 5;
-    if (b.streamUrl || b.source === 'saavn') scoreB += 5;
+    if (a.streamUrl || a.source === 'saavn') scoreA += W.streamBonus;
+    if (b.streamUrl || b.source === 'saavn') scoreB += W.streamBonus;
 
     return scoreB - scoreA;
   });
@@ -308,12 +424,16 @@ export function detectTopResult(
 }
 
 /**
- * Unified multi-provider search with instant partial returns and deduplication
+ * Unified multi-provider search with instant partial returns and deduplication.
+ * Each provider races a time budget so one slow source never stalls the merge;
+ * per-source health rides along for partial-failure UI. Pass a run id from
+ * nextSearchRun() to ignore stale late arrivals (debounced keystrokes).
  */
 export async function executeUnifiedSearch(
   query: string,
   filter: SearchFilter = 'all',
-  onPartialResults?: (results: UnifiedSearchResults) => void
+  onPartialResults?: (results: UnifiedSearchResults) => void,
+  runId?: number,
 ): Promise<UnifiedSearchResults> {
   const q = query.trim();
   if (!q) {
@@ -324,12 +444,16 @@ export async function executeUnifiedSearch(
   let accumulatedArtists: SearchArtist[] = [];
   let accumulatedAlbums: Album[] = [];
   let accumulatedPlaylists: Playlist[] = [];
+  let ytOk = false;
+  let saavnOk = false;
+
+  const alive = () => runId === undefined || !isStaleRun(runId);
 
   const updateState = () => {
     const dedupedTracks = rankTracks(deduplicateTracks(accumulatedTracks), q);
-    const dedupedArtists = deduplicateArtists(accumulatedArtists);
-    const dedupedAlbums = deduplicateAlbums(accumulatedAlbums);
-    const dedupedPlaylists = deduplicatePlaylists(accumulatedPlaylists);
+    const dedupedArtists = rankByName(deduplicateArtists(accumulatedArtists), q, (a) => a.name);
+    const dedupedAlbums = rankByName(deduplicateAlbums(accumulatedAlbums), q, (a) => a.name);
+    const dedupedPlaylists = rankByName(deduplicatePlaylists(accumulatedPlaylists), q, (p) => p.name);
 
     const topResult = detectTopResult(q, dedupedTracks, dedupedArtists, dedupedAlbums, dedupedPlaylists);
 
@@ -339,14 +463,16 @@ export async function executeUnifiedSearch(
       albums: dedupedAlbums,
       playlists: dedupedPlaylists,
       topResult,
+      sources: { ytmusic: ytOk, saavn: saavnOk },
     };
 
-    onPartialResults?.(results);
+    if (alive()) onPartialResults?.(results);
     return results;
   };
 
-  // Launch YT Music & JioSaavn in parallel
-  const ytPromise = ytmusicSearch(q, filter).then((ytRes) => {
+  // Launch YT Music & JioSaavn in parallel (budgeted)
+  const ytPromise = withBudget(ytmusicSearch(q, filter)).then((ytRes) => {
+    ytOk = true;
     if (ytRes.tracks?.length) accumulatedTracks.push(...ytRes.tracks);
     if (ytRes.artists?.length) accumulatedArtists.push(...ytRes.artists);
     if (ytRes.albums?.length) accumulatedAlbums.push(...ytRes.albums);
@@ -355,32 +481,38 @@ export async function executeUnifiedSearch(
   }).catch(() => null);
 
   const saavnPromise = (async () => {
-    if (filter === 'all') {
-      const saavnRes = await searchSaavnAll(q).catch(() => ({ tracks: [], albums: [], playlists: [], artists: [] }));
-      if (saavnRes.tracks?.length) accumulatedTracks.push(...saavnRes.tracks);
-      if (saavnRes.artists?.length) accumulatedArtists.push(...saavnRes.artists);
-      if (saavnRes.albums?.length) accumulatedAlbums.push(...saavnRes.albums);
-      if (saavnRes.playlists?.length) accumulatedPlaylists.push(...saavnRes.playlists);
-    } else if (filter === 'songs') {
-      const saavnRes = await searchSaavnSongs(q, 1, 25).catch(() => ({ total: 0, tracks: [] }));
-      if (saavnRes.tracks?.length) accumulatedTracks.push(...saavnRes.tracks);
-    } else if (filter === 'artists') {
-      const saavnRes = await searchSaavnArtists(q, 1, 25).catch(() => ({ total: 0, artists: [] }));
-      if (saavnRes.artists?.length) accumulatedArtists.push(...saavnRes.artists);
-    } else if (filter === 'albums') {
-      const saavnRes = await searchSaavnAlbums(q, 1, 25).catch(() => ({ total: 0, albums: [] }));
-      if (saavnRes.albums?.length) accumulatedAlbums.push(...saavnRes.albums);
-    } else if (filter === 'playlists') {
-      const saavnRes = await searchSaavnPlaylists(q, 1, 25).catch(() => ({ total: 0, playlists: [] }));
-      if (saavnRes.playlists?.length) accumulatedPlaylists.push(...saavnRes.playlists);
+    try {
+      if (filter === 'all') {
+        const saavnRes = await withBudget(searchSaavnAll(q));
+        if (saavnRes.tracks?.length) accumulatedTracks.push(...saavnRes.tracks);
+        if (saavnRes.artists?.length) accumulatedArtists.push(...saavnRes.artists);
+        if (saavnRes.albums?.length) accumulatedAlbums.push(...saavnRes.albums);
+        if (saavnRes.playlists?.length) accumulatedPlaylists.push(...saavnRes.playlists);
+      } else if (filter === 'songs' || filter === 'videos') {
+        // Videos are YT-side; Saavn contributes matching songs as backup.
+        const saavnRes = await withBudget(searchSaavnSongs(q, 1, 25));
+        if (saavnRes.tracks?.length) accumulatedTracks.push(...saavnRes.tracks);
+      } else if (filter === 'artists') {
+        const saavnRes = await withBudget(searchSaavnArtists(q, 1, 25));
+        if (saavnRes.artists?.length) accumulatedArtists.push(...saavnRes.artists);
+      } else if (filter === 'albums') {
+        const saavnRes = await withBudget(searchSaavnAlbums(q, 1, 25));
+        if (saavnRes.albums?.length) accumulatedAlbums.push(...saavnRes.albums);
+      } else if (filter === 'playlists') {
+        const saavnRes = await withBudget(searchSaavnPlaylists(q, 1, 25));
+        if (saavnRes.playlists?.length) accumulatedPlaylists.push(...saavnRes.playlists);
+      }
+      saavnOk = true;
+    } catch {
+      // stays false → partial-failure banner
     }
     return updateState();
-  })().catch(() => null);
+  })();
 
   await Promise.allSettled([ytPromise, saavnPromise]);
 
   // Fallback to YouTube direct search if no tracks were found
-  if (accumulatedTracks.length === 0 && (filter === 'all' || filter === 'songs')) {
+  if (accumulatedTracks.length === 0 && (filter === 'all' || filter === 'songs' || filter === 'videos')) {
     try {
       const ytFallback = await searchYouTube(q);
       if (ytFallback.length) {
@@ -393,9 +525,47 @@ export async function executeUnifiedSearch(
 }
 
 /**
- * Combines suggestions from YT Music and JioSaavn with fast response
+ * Ranked suggestion merge: recent-search prefix matches first, then
+ * provider suggestions (prefix before substring), deduped and capped.
  */
-export async function getUnifiedSuggestions(query: string): Promise<string[]> {
+export function rankSuggestions(query: string, recent: string[], provider: string[]): string[] {
+  const normQ = query.trim().toLowerCase();
+  if (!normQ) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (s: string) => {
+    const cleaned = s.trim();
+    const lower = cleaned.toLowerCase();
+    if (cleaned && !seen.has(lower)) {
+      seen.add(lower);
+      out.push(cleaned);
+    }
+  };
+  for (const r of recent) {
+    if (r.toLowerCase().startsWith(normQ)) push(r);
+  }
+  const cleaned = provider.map((s) => s.trim()).filter(Boolean);
+  const starts: string[] = [];
+  const contains: string[] = [];
+  const rest: string[] = [];
+  for (const s of cleaned) {
+    const lower = s.toLowerCase();
+    if (lower.startsWith(normQ)) starts.push(s);
+    else if (lower.includes(normQ)) contains.push(s);
+    else rest.push(s);
+  }
+  // Prefer shorter (more precise) completions within each band.
+  const byLength = (a: string, b: string) => a.length - b.length;
+  starts.sort(byLength);
+  contains.sort(byLength);
+  for (const s of [...starts, ...contains, ...rest]) push(s);
+  return out.slice(0, SEARCH_CONFIG.suggestionLimit);
+}
+
+/**
+ * Combines recent searches with YT Music and JioSaavn suggestions.
+ */
+export async function getUnifiedSuggestions(query: string, recent: string[] = []): Promise<string[]> {
   const q = query.trim();
   if (!q) return [];
 
@@ -404,17 +574,5 @@ export async function getUnifiedSuggestions(query: string): Promise<string[]> {
     getSaavnSuggestions(q).catch(() => [] as string[]),
   ]);
 
-  const seen = new Set<string>();
-  const combined: string[] = [];
-
-  for (const s of [...ytSug, ...saavnSug]) {
-    const cleaned = s.trim();
-    const lower = cleaned.toLowerCase();
-    if (cleaned && !seen.has(lower)) {
-      seen.add(lower);
-      combined.push(cleaned);
-    }
-  }
-
-  return combined.slice(0, 8);
+  return rankSuggestions(q, recent, [...ytSug, ...saavnSug]);
 }

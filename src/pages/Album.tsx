@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useDismiss } from '../hooks/useDismiss';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
   Play,
   Pause,
@@ -21,12 +22,18 @@ import {
   Radio,
   MoreVertical,
   ListPlus,
+  Bookmark,
 } from 'lucide-react';
 import { Track, Album } from '../types';
-import { getSaavnAlbumDetails, searchSaavnAlbums, getSaavnBrowseModules } from '../services/saavnApi';
-import { getAlbumDetails } from '../services/ytmusicApi';
-import { deduplicateTracks, deduplicateAlbums } from '../services/searchEngine';
-import { fetchRadio } from '../services/recommendationApi';
+import { searchSaavnAlbums, getSaavnBrowseModules } from '../services/saavnApi';
+import { deduplicateAlbums } from '../services/searchEngine';
+import {
+  fetchAlbumDetail,
+  isAlbumSaved,
+  toggleAlbumSaved,
+  type CanonicalAlbum,
+} from '../services/artistAlbum';
+import { startRadioAndPlay } from '../services/radioEngine';
 import { recommendTracks } from '../services/recommendationEngine';
 import { playerStore } from '../services/playerStore';
 import { usePlayerEngine } from '../services/playerEngine';
@@ -48,13 +55,20 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
   onBack,
 }) => {
   const [album, setAlbum] = useState<Album | null>(null);
+  const [canonical, setCanonical] = useState<CanonicalAlbum | null>(null);
+  const [alternate, setAlternate] = useState<{ id: string; edition: string; title: string } | null>(null);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [recommendedAlbums, setRecommendedAlbums] = useState<Album[]>([]);
   const [moreLikeThis, setMoreLikeThis] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingSecondary, setLoadingSecondary] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+  useDismiss(moreOpen, moreRef, () => setMoreOpen(false));
   const [isAlbumFav, setIsAlbumFav] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const reduceMotion = useReducedMotion();
 
   // Discovery / Idle State
   const [popularAlbums, setPopularAlbums] = useState<Album[]>([]);
@@ -87,82 +101,87 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
     };
   }, []);
 
-  // Multi-source Album loader
+  // Multi-source Album loader (canonical layer, progressive: core first).
   const loadAlbumData = useCallback(async (id: string) => {
     setLoading(true);
+    setLoadingSecondary(false);
     setLoadError('');
     setAlbum(null);
+    setCanonical(null);
+    setAlternate(null);
     setTracks([]);
     setRecommendedAlbums([]);
     setMoreLikeThis([]);
+    setSaved(false);
 
-    try {
-      // 1. Fetch from JioSaavn & YT Music
-      const [saavnRes, ytRes] = await Promise.allSettled([
-        getSaavnAlbumDetails(id),
-        getAlbumDetails(id),
-      ]);
-
-      const saavnData = saavnRes.status === 'fulfilled' ? saavnRes.value : null;
-      const ytData = ytRes.status === 'fulfilled' ? ytRes.value : null;
-
-      let resolvedAlbum: Album | null = null;
-      let rawTracks: Track[] = [];
-
-      if (saavnData && saavnData.album) {
-        resolvedAlbum = saavnData.album;
-        if (saavnData.tracks?.length) rawTracks.push(...saavnData.tracks);
+    const applyDetail = (
+      detail: {
+        album: CanonicalAlbum;
+        tracks: Track[];
+        alternate?: { id: string; edition: string; title: string };
+      } | null,
+      isComplete: boolean,
+    ) => {
+      if (!detail) return;
+      const c = detail.album;
+      const compat: Album = {
+        albumId: c.sourceIds.saavn || c.sourceIds.ytmusic || c.id,
+        playlistId: c.sourceIds.ytmusic || '',
+        name: c.title,
+        artist: { artistId: c.artistId, name: c.artist },
+        year: c.year,
+        thumbnails: c.artwork ? [{ url: c.artwork, width: 0, height: 0 }] : [],
+        type: 'ALBUM',
+        songCount: c.trackCount,
+        source: c.sourceIds.ytmusic ? 'ytmusic' : 'saavn',
+      };
+      setCanonical(c);
+      setAlbum(compat);
+      setTracks(detail.tracks);
+      setAlternate(detail.alternate || null);
+      setSaved(isAlbumSaved(compat.albumId));
+      if (detail.tracks.length > 0) {
+        setIsAlbumFav(detail.tracks.some((t) => playerStore.isFav(t.id)));
       }
-
-      if (ytData && ytData.info) {
-        if (!resolvedAlbum) resolvedAlbum = ytData.info;
-        if (ytData.tracks?.length) rawTracks.push(...ytData.tracks);
-      }
-
-      // If only YT Music album was found and we have artist/album name, try finding JioSaavn 320k tracks
-      if (resolvedAlbum && !saavnData && resolvedAlbum.name) {
-        try {
-          const saavnSearch = await searchSaavnAlbums(`${resolvedAlbum.name} ${resolvedAlbum.artist?.name || ''}`, 1, 1);
-          if (saavnSearch.albums?.length && saavnSearch.albums[0].albumId) {
-            const secondarySaavn = await getSaavnAlbumDetails(saavnSearch.albums[0].albumId);
-            if (secondarySaavn && secondarySaavn.tracks?.length) {
-              rawTracks.push(...secondarySaavn.tracks);
-            }
-          }
-        } catch {}
-      }
-
-      const dedupedTracks = deduplicateTracks(rawTracks);
-      if (!resolvedAlbum) {
-        setLoadError('Album not found. It may have been removed or the link is wrong.');
-      }
-      setAlbum(resolvedAlbum);
-      setTracks(dedupedTracks);
-
-      // Check if any track from album is in favorites
-      if (dedupedTracks.length > 0) {
-        const anyFav = dedupedTracks.some((t) => playerStore.isFav(t.id));
-        setIsAlbumFav(anyFav);
-      }
-
-      // Load recommended/more albums by same artist
-      if (resolvedAlbum?.artist?.name) {
-        const artistQuery = resolvedAlbum.artist.name;
-        searchSaavnAlbums(artistQuery, 1, 8)
+      if (isComplete) {
+        // Secondary: same-artist albums + engine recommendations.
+        setLoadingSecondary(true);
+        let settled = 0;
+        const done = () => {
+          settled += 1;
+          if (settled >= 2) setLoadingSecondary(false);
+        };
+        searchSaavnAlbums(c.artist, 1, 8)
           .then((res) => {
-            const others = res.albums.filter((a) => a.albumId !== id);
+            const others = (res.albums || []).filter((a) => a.albumId !== id);
             setRecommendedAlbums(deduplicateAlbums(others).slice(0, 6));
           })
-          .catch(() => {});
+          .catch(() => {})
+          .finally(done);
+        if (detail.tracks.length) {
+          const seeds = detail.tracks.slice(0, 3);
+          const exclude = new Set(detail.tracks.map((t) => t.id));
+          recommendTracks({ seedTracks: seeds, excludeIds: exclude, limit: 8 })
+            .then((recs) => setMoreLikeThis(recs.filter((t) => !exclude.has(t.id)).slice(0, 8)))
+            .catch(() => setMoreLikeThis([]))
+            .finally(done);
+        } else {
+          done();
+        }
       }
+    };
 
-      // More Like This songs (central recommendation engine, seeded by album).
-      if (dedupedTracks.length) {
-        const seeds = dedupedTracks.slice(0, 3);
-        const exclude = new Set(dedupedTracks.map((t) => t.id));
-        recommendTracks({ seedTracks: seeds, excludeIds: exclude, limit: 8 })
-          .then((recs) => setMoreLikeThis(recs.filter((t) => !exclude.has(t.id)).slice(0, 8)))
-          .catch(() => setMoreLikeThis([]));
+    try {
+      const detail = await fetchAlbumDetail(id, (stage, partial) => {
+        if (stage === 'core' && partial) {
+          applyDetail(partial, false);
+          setLoading(false);
+        }
+      });
+      if (!detail) {
+        setLoadError('Album not found. It may have been removed or the link is wrong.');
+      } else {
+        applyDetail(detail, true);
       }
     } catch (err) {
       setLoadError('Something went wrong loading this album. Check your connection and try again.');
@@ -170,6 +189,18 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
       setLoading(false);
     }
   }, []);
+
+  const handleToggleSave = () => {
+    if (!canonical || !album) return;
+    const nowSaved = toggleAlbumSaved({
+      id: album.albumId,
+      title: canonical.title,
+      artist: canonical.artist,
+      artwork: canonical.artwork,
+    });
+    setSaved(nowSaved);
+    setToastMessage(nowSaved ? `Saved "${canonical.title}" to your library` : `Removed "${canonical.title}" from your library`);
+  };
 
   // Idle / Featured albums loader
   const loadFeaturedAlbums = useCallback(async () => {
@@ -266,9 +297,12 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
     if (!tracks.length) return;
     setToastMessage(`Starting radio for "${album?.name || 'this album'}"...`);
     try {
-      const radio = await fetchRadio(tracks[0], 20);
-      if (radio.length) onPlay(radio[0], radio);
-      else onPlay(tracks[0], tracks);
+      await startRadioAndPlay('album', {
+        track: tracks[0],
+        albumId: (album as any)?.albumId,
+        albumName: album?.name,
+        contextTracks: tracks,
+      });
     } catch {
       setToastMessage('Could not start radio');
     }
@@ -410,9 +444,9 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
+      initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+      transition={{ duration: reduceMotion ? 0.01 : 0.3 }}
       className="space-y-8 pb-24"
     >
       {/* Back Button */}
@@ -454,7 +488,9 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
           {/* Details */}
           <div className="flex flex-1 flex-col justify-end min-w-0 text-center sm:text-left">
             <div className="inline-flex items-center justify-center sm:justify-start gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-cyan-400">
-              <Disc3 className="h-3.5 w-3.5" /> Official Album
+              <Disc3 className="h-3.5 w-3.5" />
+              {canonical?.edition ? `${canonical.edition} Edition` : canonical?.releaseType || 'Album'}
+              {canonical?.year ? ` • ${canonical.year}` : ''}
             </div>
 
             <h1 className="mt-2 text-[26px] sm:text-[36px] lg:text-[44px] font-black tracking-[-0.03em] leading-tight text-white line-clamp-2">
@@ -486,6 +522,16 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.08] px-2.5 py-0.5 border border-white/[0.08] uppercase text-[10px] font-bold text-cyan-300">
                   {album.language}
                 </span>
+              )}
+              {alternate && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate?.('album', alternate.id)}
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/25 px-2.5 py-0.5 text-[10px] font-bold text-amber-300 hover:bg-amber-500/25 transition-colors"
+                  title={`Open the ${alternate.edition} edition`}
+                >
+                  <Disc3 className="h-3 w-3" /> Also: {alternate.edition} Edition
+                </button>
               )}
             </div>
 
@@ -524,6 +570,22 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
 
               <button
                 type="button"
+                onClick={handleToggleSave}
+                disabled={!album}
+                aria-pressed={saved}
+                className={`flex h-11 items-center gap-2 rounded-full border px-4 text-[13px] font-semibold transition-all active:scale-95 disabled:opacity-50 ${
+                  saved
+                    ? 'bg-white text-black border-white hover:bg-white/90'
+                    : 'bg-white/[0.08] hover:bg-white/[0.14] border-white/[0.1] text-white'
+                }`}
+                title={saved ? 'Remove from your Wave library' : 'Save to your Wave library'}
+              >
+                <Bookmark className={`h-4 w-4 ${saved ? 'fill-current' : ''}`} />
+                {saved ? 'Saved' : 'Save'}
+              </button>
+
+              <button
+                type="button"
                 onClick={handleAddAllToPlaylist}
                 className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-4 text-[13px] font-semibold text-white transition-all active:scale-95"
                 title="Add all songs to playlist"
@@ -541,7 +603,7 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
                 <Radio className="h-4 w-4 text-cyan-300" /> Radio
               </button>
 
-              <div className="relative">
+              <div className="relative" ref={moreRef}>
                 <button
                   type="button"
                   onClick={() => setMoreOpen((v) => !v)}
@@ -592,6 +654,45 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
           </h2>
         </div>
 
+        {/* Sticky mini transport: playback stays reachable while scrolling */}
+        {tracks.length > 0 && (
+          <div className="sticky top-2 z-10 flex items-center gap-2 rounded-full border border-white/10 bg-[#141416]/90 backdrop-blur-xl px-3 py-2 shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
+            <button
+              type="button"
+              onClick={handlePlayAll}
+              aria-label={`Play ${album?.name || 'album'} from the start`}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black hover:bg-white/90 active:scale-95 transition-all"
+            >
+              <Play className="h-3.5 w-3.5 fill-current ml-0.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleShuffle}
+              aria-label="Shuffle album"
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 active:scale-95 transition-all"
+            >
+              <Shuffle className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleAddAllToQueue}
+              aria-label="Add album to queue"
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 active:scale-95 transition-all"
+            >
+              <ListPlus className="h-3.5 w-3.5" />
+            </button>
+            <span className="truncate text-xs font-semibold text-white/60 pl-1">
+              {album?.name || 'Album'} • {tracks.length} {tracks.length === 1 ? 'song' : 'songs'}
+            </span>
+          </div>
+        )}
+
+        {tracks.length === 0 ? (
+          <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-8 text-center">
+            <p className="text-[14px] font-bold text-white">No tracks available for this album</p>
+            <p className="mt-1 text-xs text-white/50">Try another source or check your connection.</p>
+          </div>
+        ) : (
         <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-2 divide-y divide-white/[0.04]">
           {tracks.map((track, idx) => (
             <SongRow
@@ -608,12 +709,23 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
             />
           ))}
         </div>
+        )}
       </div>
 
       {/* ======================================================= */}
       {/* 3. MORE LIKE THIS SONGS (central recommendation engine) */}
       {/* ======================================================= */}
-      {moreLikeThis.length > 0 && (
+      {loadingSecondary && moreLikeThis.length === 0 ? (
+        <div className="space-y-3" aria-label="Loading similar songs">
+          <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+          <div className="space-y-2">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="h-14 rounded-2xl bg-white/[0.04] border border-white/5 animate-pulse" />
+            ))}
+          </div>
+        </div>
+      ) : (
+        moreLikeThis.length > 0 && (
         <div className="space-y-3">
           <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2 px-1">
             <Sparkles className="h-5 w-5 text-amber-400" /> More Like This
@@ -637,6 +749,7 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
             ))}
           </div>
         </div>
+        )
       )}
 
       {/* ======================================================= */}
@@ -656,7 +769,20 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
       {/* ======================================================= */}
       {/* 4. MORE LIKE THIS / RECOMMENDED ALBUMS */}
       {/* ======================================================= */}
-      {recommendedAlbums.length > 0 && (
+      {loadingSecondary && recommendedAlbums.length === 0 ? (
+        <div className="space-y-3.5 pt-4" aria-label="Loading more albums">
+          <div className="h-6 w-44 bg-white/10 rounded-full animate-pulse" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="rounded-[22px] bg-white/[0.03] border border-white/10 p-3 animate-pulse">
+                <div className="aspect-square w-full rounded-[16px] bg-white/[0.04]" />
+                <div className="mt-2.5 h-3 w-3/4 rounded-full bg-white/[0.06]" />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        recommendedAlbums.length > 0 && (
         <div className="space-y-3.5 pt-4">
           <div className="flex items-center justify-between px-1">
             <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
@@ -668,7 +794,7 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
             {recommendedAlbums.map((rec) => (
               <motion.div
                 key={rec.albumId}
-                whileHover={{ y: -4 }}
+                whileHover={reduceMotion ? undefined : { y: -4 }}
                 onClick={() => onNavigate?.('album', rec.albumId)}
                 role="button"
                 tabIndex={0}
@@ -704,6 +830,7 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
             ))}
           </div>
         </div>
+        )
       )}
 
       {/* Song Context Menu (⋮) */}
@@ -739,11 +866,12 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
       <AnimatePresence>
         {toastMessage && (
           <motion.div
+            role="status"
             initial={{ opacity: 0, y: 30, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 30, scale: 0.95 }}
-            transition={{ duration: 0.2 }}
-            className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
+            transition={{ duration: reduceMotion ? 0.01 : 0.2 }}
+            className="fixed bottom-[calc(112px+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
           >
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
             <span>{toastMessage}</span>
@@ -753,3 +881,4 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
     </motion.div>
   );
 };
+

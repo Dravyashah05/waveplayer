@@ -1,6 +1,15 @@
 import { Track } from '../types';
 import { getSimilarTracks } from './recommendationEngine';
 import { logEvent } from './listeningStore';
+import {
+  buildShuffleOrder,
+  defaultMeta,
+  isMetaLike,
+  type QueueItemMeta,
+  type QueueMetaInput,
+} from './queueMeta';
+
+export type { QueueItemMeta, QueueMetaInput };
 
 type Listener = () => void;
 type Repeat = 'off' | 'one' | 'all';
@@ -12,6 +21,8 @@ const LS_HISTORY = 'wave:history';
 const LS_SHUFFLE = 'wave:shuffle';
 const LS_REPEAT = 'wave:repeat';
 const LS_VOLUME = 'wave:volume';
+// Provenance sidecar only (ids + labels). Never tokens, never credentials.
+const LS_QUEUE_META = 'wave:queue_meta';
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -38,12 +49,25 @@ function loadTracks(key: string): Track[] {
   if (!Array.isArray(arr)) return [];
   return arr.filter(isTrackLike);
 }
+/** Load provenance sidecar; length-mismatch or garbage resets to defaults. */
+function loadMetas(): QueueItemMeta[] {
+  try {
+    const raw = localStorage.getItem(LS_QUEUE_META);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isMetaLike);
+  } catch {
+    return [];
+  }
+}
 function save(key: string, v: unknown) {
   try { localStorage.setItem(key, JSON.stringify(v)); } catch {}
 }
 
 class PlayerStore {
   private tracks: Track[] = loadTracks(LS_QUEUE);
+  private metas: QueueItemMeta[] = loadMetas();
   private index = load<number>(LS_INDEX, -1);
   private favs: Track[] = loadTracks(LS_FAV);
   private history: Track[] = loadTracks(LS_HISTORY);
@@ -66,6 +90,11 @@ class PlayerStore {
     // throw here at import time and white-screen the app).
     if (!Array.isArray(this.tracks)) this.tracks = [];
     else this.tracks = this.tracks.filter(isTrackLike);
+    // Sidecar must mirror the queue 1:1; anything else resets to defaults
+    // (fresh queueItemIds, addedBy user) rather than crashing or mislabeling.
+    if (!Array.isArray(this.metas) || this.metas.length !== this.tracks.length) {
+      this.metas = this.tracks.map(() => defaultMeta());
+    }
     if (!Array.isArray(this.favs)) this.favs = [];
     if (!Array.isArray(this.history)) this.history = [];
     if (typeof this.index !== 'number' || !Number.isFinite(this.index)) this.index = -1;
@@ -73,9 +102,10 @@ class PlayerStore {
     if (this.tracks.length && this.index === -1) this.index = 0;
   }
 
-  // queue
-  setQueue(tracks: Track[], startIndex = 0) {
+  // queue (provenance sidecar mirrors every mutation 1:1)
+  setQueue(tracks: Track[], startIndex = 0, metas?: (QueueMetaInput | undefined)[]) {
     this.tracks = [...tracks];
+    this.metas = tracks.map((_, i) => defaultMeta(metas?.[i]));
     this.index = Math.max(0, Math.min(startIndex, tracks.length - 1));
     if (tracks.length === 0) this.index = -1;
     this.bump();
@@ -87,10 +117,11 @@ class PlayerStore {
     this.emit();
   }
 
-  addToQueue(track: Track) {
+  addToQueue(track: Track, meta?: QueueMetaInput) {
     // avoid dup
     if (this.tracks.find((t) => t.id === track.id)) return;
     this.tracks.push(track);
+    this.metas.push(defaultMeta(meta));
     logEvent({ songId: track.id, track, event: 'add_to_queue', playedSeconds: 0, duration: track.durationSeconds || 0 });
     if (this.index === -1) this.index = 0;
     this.bump();
@@ -99,15 +130,17 @@ class PlayerStore {
     this.emit();
   }
 
-  playNext(track: Track) {
+  playNext(track: Track, meta?: QueueMetaInput) {
     if (!track?.id) return;
     const existingIdx = this.tracks.findIndex((t) => t.id === track.id);
     if (existingIdx !== -1) {
       this.tracks.splice(existingIdx, 1);
+      this.metas.splice(existingIdx, 1);
       if (existingIdx < this.index) this.index--;
     }
     const insertIdx = this.index >= 0 ? this.index + 1 : 0;
     this.tracks.splice(insertIdx, 0, track);
+    this.metas.splice(insertIdx, 0, defaultMeta(meta));
     if (this.index === -1) this.index = 0;
     logEvent({ songId: track.id, track, event: 'add_to_queue', playedSeconds: 0, duration: track.durationSeconds || 0, meta: { playNext: true } });
     this.bump();
@@ -116,14 +149,23 @@ class PlayerStore {
     this.emit();
   }
 
-  addMultipleToQueue(tracks: Track[]) {
+  addMultipleToQueue(tracks: Track[], metas?: (QueueMetaInput | undefined)[]) {
     if (!tracks.length) return;
     const existing = new Set(this.tracks.map((t) => t.id));
-    const toAdd = tracks.filter((t) => t?.id && !existing.has(t.id));
-    if (!toAdd.length) return;
-    this.tracks.push(...toAdd);
-    for (const t of toAdd) {
-      logEvent({ songId: t.id, track: t, event: 'add_to_queue', playedSeconds: 0, duration: t.durationSeconds || 0 });
+    const picks: Array<{ t: Track; i: number }> = [];
+    tracks.forEach((t, i) => {
+      if (t?.id && !existing.has(t.id)) {
+        existing.add(t.id);
+        picks.push({ t, i });
+      }
+    });
+    if (!picks.length) return;
+    for (const p of picks) {
+      this.tracks.push(p.t);
+      this.metas.push(defaultMeta(metas?.[p.i]));
+    }
+    for (const p of picks) {
+      logEvent({ songId: p.t.id, track: p.t, event: 'add_to_queue', playedSeconds: 0, duration: p.t.durationSeconds || 0 });
     }
     if (this.index === -1) this.index = 0;
     this.bump();
@@ -135,6 +177,7 @@ class PlayerStore {
   removeFromQueue(idx: number) {
     if (idx < 0 || idx >= this.tracks.length) return;
     this.tracks.splice(idx, 1);
+    this.metas.splice(idx, 1);
     if (this.tracks.length === 0) this.index = -1;
     else if (idx < this.index) this.index--;
     else if (idx === this.index) {
@@ -152,6 +195,9 @@ class PlayerStore {
     if (from < 0 || from >= this.tracks.length || to < 0 || to >= this.tracks.length || from === to) return;
     const [m] = this.tracks.splice(from, 1);
     this.tracks.splice(to, 0, m);
+    // Provenance travels with its track (labels never detach on reorder).
+    const [mm] = this.metas.splice(from, 1);
+    if (mm) this.metas.splice(to, 0, mm);
     // adjust index
     if (this.index === from) this.index = to;
     else if (from < this.index && to >= this.index) this.index--;
@@ -163,6 +209,7 @@ class PlayerStore {
 
   clearQueue() {
     this.tracks = [];
+    this.metas = [];
     this.index = -1;
     this.bump();
     this.shuffleOrder = [];
@@ -205,6 +252,7 @@ class PlayerStore {
       const toAdd = recs.filter(t => t.id && !existing.has(t.id)).slice(0, 5);
       if (toAdd.length) {
         this.tracks.push(...toAdd);
+        for (const t of toAdd) this.metas.push(defaultMeta({ addedBy: 'autoplay', context: 'prefetch' }));
         this.rebuildShuffle();
         this.persistQueue();
         this.emit();
@@ -264,6 +312,11 @@ class PlayerStore {
   }
   queue(): Track[] { return this.tracks; }
   currentIndex(): number { return this.index; }
+  /** Provenance sidecar (same order as queue(); empty when nothing queued). */
+  queueMetas(): QueueItemMeta[] { return this.metas; }
+  metaForIndex(i: number): QueueItemMeta | null {
+    return i >= 0 && i < this.metas.length ? this.metas[i] : null;
+  }
 
   // shuffle / repeat
   get shuffle() { return this._shuffle; }
@@ -323,14 +376,16 @@ class PlayerStore {
   // helpers
   private rebuildShuffle() {
     if (this.tracks.length === 0) { this.shuffleOrder = []; this.shufflePtr = 0; return; }
-    this.shuffleOrder = this.tracks.map((_, i) => i).sort(() => Math.random() - 0.5);
-    // ensure current at ptr
+    // Smart order: current first, unbiased shuffle, artist/album spread.
+    // Queue order itself is never mutated — only the playback pointer path.
+    this.shuffleOrder = buildShuffleOrder(this.tracks, this.index);
     this.shufflePtr = this.shuffleOrder.indexOf(this.index);
     if (this.shufflePtr === -1) this.shufflePtr = 0;
   }
   private persistQueue() {
     save(LS_QUEUE, this.tracks);
     save(LS_INDEX, this.index);
+    save(LS_QUEUE_META, this.metas);
   }
 
   subscribe(fn: Listener) { this.listeners.add(fn); return () => this.listeners.delete(fn); }

@@ -4,6 +4,7 @@ import { getListeningEvents } from './listeningStore';
 import { getHistory } from './ytmusicLibrary';
 import { googleAccountStore } from '../hooks/useGoogleAccount';
 import { currentScope, scopeKey } from './scopedStorage';
+import { CACHE_TTL } from './cacheConfig';
 
 /**
  * History aggregation layer:
@@ -23,7 +24,8 @@ import { currentScope, scopeKey } from './scopedStorage';
 
 const YT_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 const CACHE_BASE = 'yt_history_v1';
-const CACHE_TTL_MS = 15 * 60 * 1000;
+// Central policy: user history (short TTL, explicit refresh only).
+const CACHE_TTL_MS = CACHE_TTL.historyMs;
 
 export interface UnifiedHistoryEntry {
   track: Track;

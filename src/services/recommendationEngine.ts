@@ -5,6 +5,7 @@ import { getSkipCount, hasRecentPlay, getEventsForSong, skipPenalty, getListenin
 import { cleanTitle, detectVersion, normalizeText } from './recommendation/metadataNormalizer';
 import { matchSongs } from './recommendation/songMatcher';
 import { diversify } from './recommendation/diversity';
+import { CACHE_TTL as CENTRAL_TTL } from './cacheConfig';
 
 export interface ScoredTrack extends Track { _score: number; _reasons: string[] }
 
@@ -13,7 +14,8 @@ const PENALTIES = { recentPlay: 0.45 };
 const SESSION_GAP_MS = 45 * 60 * 1000;
 
 let memCache = new Map<string, { at: number; tracks: Track[] }>();
-const CACHE_TTL = 10 * 60 * 1000;
+// Central policy: browse modules are public trending data (shared keys OK).
+const CACHE_TTL = CENTRAL_TTL.publicStaticMs;
 let browseCache: { at: number; value: Awaited<ReturnType<typeof getSaavnBrowseModules>> } | null = null;
 
 async function getCachedBrowse() {

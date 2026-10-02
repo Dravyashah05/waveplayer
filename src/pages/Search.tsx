@@ -33,11 +33,17 @@ import {
   saveRecentSearch,
   removeRecentSearch,
   clearRecentSearches,
+  nextSearchRun,
+  isStaleRun,
+  searchWavePlaylists,
+  deduplicatePlaylists,
   UnifiedSearchResults,
   TopResultItem,
 } from '../services/searchEngine';
+import { getLocalPlaylists } from '../services/libraryStore';
 import { getSaavnBrowseModules } from '../services/saavnApi';
 import { fetchRadio } from '../services/recommendationApi';
+import { startRadioAndPlay } from '../services/radioEngine';
 import { SongRow } from '../components/SongRow';
 import { SongContextMenu } from '../components/SongContextMenu';
 import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
@@ -45,10 +51,39 @@ import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
 const FILTERS: { id: SearchFilter; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'songs', label: 'Songs' },
+  { id: 'videos', label: 'Videos' },
   { id: 'artists', label: 'Artists' },
   { id: 'albums', label: 'Albums' },
   { id: 'playlists', label: 'Playlists' },
 ];
+
+const EMPTY_COPY: Record<SearchFilter, { title: string; hint: string }> = {
+  all: { title: 'No results found', hint: 'Check spelling or try exploring popular artists and albums.' },
+  songs: { title: 'No songs found', hint: 'Try a different title, artist, or check your spelling.' },
+  videos: { title: 'No videos found', hint: 'Try a different title, artist, or check your spelling.' },
+  artists: { title: 'No artists found', hint: 'Try the full artist name or check your spelling.' },
+  albums: { title: 'No albums found', hint: 'Try the full album or artist name.' },
+  playlists: { title: 'No playlists found', hint: 'Try a mood, genre, or artist name instead.' },
+};
+
+/**
+ * Merge device-local Wave playlists into provider results (Wave first,
+ * deduped). Private YouTube playlists stay out of global search — they
+ * surface only in Library for the signed-in owner.
+ */
+function withWavePlaylists(results: UnifiedSearchResults, query: string): UnifiedSearchResults {
+  if (!results) return results;
+  let wave: Playlist[] = [];
+  try {
+    wave = searchWavePlaylists(query, getLocalPlaylists());
+  } catch {
+    wave = [];
+  }
+  if (!wave.length) return results;
+  const seen = new Set(wave.map((p) => p.playlistId));
+  const rest = (results.playlists || []).filter((p) => p?.playlistId && !seen.has(p.playlistId));
+  return { ...results, playlists: deduplicatePlaylists([...wave, ...rest]) };
+}
 
 const POPULAR_SEARCH_CHIPS = [
   'Arijit Singh',
@@ -174,6 +209,7 @@ export const SearchPage: React.FC<{
       setError(null);
       setSearched(true);
       setShowSuggestions(false);
+      const runId = nextSearchRun();
 
       // Save to recent
       const updatedRecent = saveRecentSearch(cleanQ);
@@ -181,16 +217,24 @@ export const SearchPage: React.FC<{
       onQueryChange?.(cleanQ);
 
       try {
-        const searchResults = await executeUnifiedSearch(cleanQ, filter, (partial) => {
-          setResults(partial);
-          setLoading(false);
-        });
-        setResults(searchResults);
+        const searchResults = await executeUnifiedSearch(
+          cleanQ,
+          filter,
+          (partial) => {
+            if (isStaleRun(runId)) return;
+            setResults(withWavePlaylists(partial, cleanQ));
+            setLoading(false);
+          },
+          runId,
+        );
+        if (isStaleRun(runId)) return;
+        setResults(withWavePlaylists(searchResults, cleanQ));
       } catch (err: any) {
+        if (isStaleRun(runId)) return;
         console.error('[SearchPage] search error:', err);
         setError('Search is temporarily unavailable. Please try again.');
       } finally {
-        setLoading(false);
+        if (!isStaleRun(runId)) setLoading(false);
       }
     },
     [activeFilter, onQueryChange]
@@ -231,7 +275,7 @@ export const SearchPage: React.FC<{
     }
 
     sugTimeoutRef.current = window.setTimeout(async () => {
-      const sugs = await getUnifiedSuggestions(cleanQ);
+      const sugs = await getUnifiedSuggestions(cleanQ, getRecentSearches());
       setSuggestions(sugs);
       setShowSuggestions(sugs.length > 0);
       setSelectedSugIdx(-1);
@@ -298,16 +342,15 @@ export const SearchPage: React.FC<{
     }
   };
 
-  // Start Radio from Artist or Song
+  // Start Radio from Artist or Song (smart session radio)
   const handleStartRadio = async (seed: Track | SearchArtist) => {
     try {
-      const seedLabel = 'name' in seed ? seed.name : seed.title;
-      setToastMessage(`Starting Radio for "${seedLabel}"...`);
-      let radioSeed: Track;
       if ('title' in seed) {
-        radioSeed = seed;
+        setToastMessage(`Starting Radio for "${seed.title}"...`);
+        await startRadioAndPlay('track', { track: seed });
       } else {
-        radioSeed = {
+        setToastMessage(`Starting ${seed.name} Radio...`);
+        const artistSeed: Track = {
           id: seed.artistId,
           title: seed.name,
           author: seed.name,
@@ -317,12 +360,11 @@ export const SearchPage: React.FC<{
           url: '',
           type: 'SONG',
         };
-      }
-      const radioTracks = await fetchRadio(radioSeed, 25);
-      if (radioTracks && radioTracks.length) {
-        onPlay(radioTracks[0], radioTracks);
-      } else {
-        onPlay(radioSeed, [radioSeed]);
+        await startRadioAndPlay('artist', {
+          track: artistSeed,
+          artistId: seed.artistId,
+          artistName: seed.name,
+        });
       }
     } catch {
       setToastMessage('Could not start radio');
@@ -428,7 +470,7 @@ export const SearchPage: React.FC<{
           </AnimatePresence>
         </div>
 
-        {/* Filter Tabs (All, Songs, Artists, Albums, Playlists) */}
+        {/* Filter Tabs (All, Songs, Videos, Artists, Albums, Playlists) */}
         {(query.trim().length > 0 || searched) && (
           <div className="max-w-3xl mx-auto mt-3 flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-0.5">
             {FILTERS.map((f) => {
@@ -678,9 +720,11 @@ export const SearchPage: React.FC<{
               <SearchIcon className="h-6 w-6" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-white">No results found for “{query}”</h3>
+              <h3 className="text-lg font-bold text-white">
+                {EMPTY_COPY[activeFilter].title} for “{query}”
+              </h3>
               <p className="text-xs text-[#8e8e93] mt-1">
-                Check spelling or try exploring popular artists and albums.
+                {EMPTY_COPY[activeFilter].hint}
               </p>
             </div>
             <div className="flex flex-wrap justify-center gap-2 pt-2">
@@ -708,9 +752,17 @@ export const SearchPage: React.FC<{
             animate={{ opacity: 1, y: 0 }}
             className="space-y-8"
           >
+            {/* Partial-source notice: one provider failed, showing the other */}
+            {results.sources && (!results.sources.ytmusic || !results.sources.saavn) && (
+              <p className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.07] px-4 py-2.5 text-xs font-medium text-amber-200/90">
+                {results.sources.ytmusic
+                  ? 'JioSaavn is unreachable right now — showing YouTube Music results.'
+                  : 'YouTube Music is unreachable right now — showing JioSaavn results.'}
+              </p>
+            )}
             {/* ——— ALL TAB VIEW ——— */}
-            {activeFilter === 'all' && (
-              <div className="space-y-8">
+          {activeFilter === 'all' && (
+            <div className="space-y-8">
                 {/* Desktop Multi-column Layout for Top Result & Top Songs */}
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
                   {/* Left Column: Top Result Card */}
@@ -872,6 +924,52 @@ export const SearchPage: React.FC<{
                               className="inline-flex items-center gap-1.5 rounded-full bg-white px-5 py-2 text-xs font-bold text-black hover:bg-white/90 shadow-md active:scale-95 transition-all"
                             >
                               <Disc3 className="h-3.5 w-3.5" /> View Album
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {results.topResult.type === 'playlist' && (
+                        <div
+                          onClick={() => {
+                            const pl = results.topResult!.item as Playlist;
+                            if (pl.playlistId && onNavigate) onNavigate('playlist', pl.playlistId);
+                          }}
+                          className="group relative cursor-pointer rounded-[28px] border border-white/10 bg-white/[0.04] hover:bg-white/[0.08] p-6 transition-all shadow-[0_8px_30px_rgba(0,0,0,0.4)] backdrop-blur-md flex flex-col justify-between h-[240px]"
+                        >
+                          <div className="flex items-center gap-4">
+                            <div className="relative h-24 w-24 rounded-[20px] overflow-hidden bg-[#18181b] ring-1 ring-white/20 shrink-0 shadow-lg">
+                              <img
+                                src={(results.topResult.item as Playlist).thumbnails?.[0]?.url || ''}
+                                alt={(results.topResult.item as Playlist).name}
+                                className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <span className="rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2.5 py-0.5 text-[10px] font-black text-emerald-300 uppercase tracking-wider">
+                                Playlist
+                              </span>
+                              <h4 className="text-[20px] sm:text-[22px] font-black text-white tracking-tight mt-1 truncate">
+                                {(results.topResult.item as Playlist).name}
+                              </h4>
+                              <p className="text-xs text-[#8e8e93] font-medium mt-0.5 truncate">
+                                {(results.topResult.item as Playlist).author || 'Curated'}
+                                {(results.topResult.item as Playlist).videoCount
+                                  ? ` • ${(results.topResult.item as Playlist).videoCount} tracks`
+                                  : ''}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-4">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const pl = results.topResult!.item as Playlist;
+                                if (pl.playlistId && onNavigate) onNavigate('playlist', pl.playlistId);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-full bg-white px-5 py-2 text-xs font-bold text-black hover:bg-white/90 shadow-md active:scale-95 transition-all"
+                            >
+                              <ListMusic className="h-3.5 w-3.5" /> View Playlist
                             </button>
                           </div>
                         </div>
@@ -1093,6 +1191,35 @@ export const SearchPage: React.FC<{
               </div>
             )}
 
+            {/* ——— VIDEOS FILTER TAB ——— */}
+            {activeFilter === 'videos' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between px-1">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#8e8e93]">
+                    Video Results ({results.tracks.filter((t) => t.type === 'VIDEO').length || results.tracks.length})
+                  </h3>
+                </div>
+                <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-2 divide-y divide-white/[0.04]">
+                  {(results.tracks.some((t) => t.type === 'VIDEO')
+                    ? results.tracks.filter((t) => t.type === 'VIDEO')
+                    : results.tracks
+                  ).map((track, idx) => (
+                    <SongRow
+                      key={`filter-video-${track.id}-${idx}`}
+                      track={track}
+                      index={idx}
+                      isActive={currentTrack?.id === track.id}
+                      isPlaying={isPlaying}
+                      onPlay={() => onPlay(track, results.tracks)}
+                      showAlbum={true}
+                      onOpenMenu={handleOpenContextMenu}
+                      onNavigate={onNavigate}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* ——— ARTISTS FILTER TAB ——— */}
             {activeFilter === 'artists' && (
               <div className="space-y-3">
@@ -1260,7 +1387,7 @@ export const SearchPage: React.FC<{
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 30, scale: 0.95 }}
             transition={{ duration: 0.2 }}
-            className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
+            className="fixed bottom-[calc(112px+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 rounded-full bg-white text-black px-4 py-2 text-xs font-bold shadow-[0_8px_30px_rgba(0,0,0,0.6)] flex items-center gap-2"
           >
             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
             <span>{toastMessage}</span>
@@ -1270,3 +1397,4 @@ export const SearchPage: React.FC<{
     </div>
   );
 };
+

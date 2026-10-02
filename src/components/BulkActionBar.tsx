@@ -30,7 +30,7 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 50, scale: 0.95 }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-        className="fixed bottom-24 lg:bottom-28 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-24px)] max-w-xl"
+        className="fixed bottom-[calc(112px+env(safe-area-inset-bottom))] lg:bottom-[calc(120px+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-40 w-[calc(100%-24px)] max-w-xl"
       >
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-full border border-white/15 bg-[#121214]/95 p-2 px-3 sm:px-4 shadow-[0_16px_48px_rgba(0,0,0,0.85)] backdrop-blur-2xl">
           {/* Count Badge */}
@@ -99,3 +99,4 @@ export const BulkActionBar: React.FC<BulkActionBarProps> = ({
     </AnimatePresence>
   );
 };
+

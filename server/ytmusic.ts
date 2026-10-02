@@ -343,14 +343,16 @@ app.get('/api/ytmusic/lyrics/:id', async (req,res)=>{
 
 app.get('/api/ytmusic/upnext/:id', async (req,res)=>{
   const id=req.params.id;
+  if (!YOUTUBE_VIDEO_ID.test(id)) return res.status(400).json({ error: 'INVALID_VIDEO_ID' });
   try { const yt=await getYTMusic(); const up=await yt.getUpNexts(id); res.json(up); }
-  catch(e:any){ console.error('[YTMusic] upnext error:', shortError(e)); res.status(500).json({ error: shortError(e) }); }
+  catch(e:any){ console.error('[YTMusic] upnext error:', shortError(e)); res.status(502).json({ error: 'YTMUSIC_UPSTREAM_ERROR' }); }
 });
 
 app.get('/api/ytmusic/video/:id', async (req,res)=>{
   const id=req.params.id;
+  if (!YOUTUBE_VIDEO_ID.test(id)) return res.status(400).json({ error: 'INVALID_VIDEO_ID' });
   try { const yt=await getYTMusic(); const v=await yt.getVideo(id); res.json(v); }
-  catch(e:any){ console.error('[YTMusic] video error:', shortError(e)); res.status(500).json({ error: shortError(e) }); }
+  catch(e:any){ console.error('[YTMusic] video error:', shortError(e)); res.status(502).json({ error: 'YTMUSIC_UPSTREAM_ERROR' }); }
 });
 
 app.get('/api/ytmusic/stream/:videoId', async (req, res) => {
@@ -368,40 +370,49 @@ app.get('/api/ytmusic/stream/:videoId', async (req, res) => {
   }
 });
 
+// Browse ids are opaque provider strings — accept a safe charset/length only.
+const BROWSE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
 app.get('/api/ytmusic/album/:id', async (req,res)=>{
   const id=req.params.id;
+  if (!BROWSE_ID.test(id)) return res.status(400).json({ error: 'INVALID_ID' });
   try { const yt=await getYTMusic(); const album=await yt.getAlbum(id); res.json(album); }
-  catch(e:any){ console.error('[YTMusic] album error:', shortError(e)); res.status(500).json({ error: shortError(e) }); }
+  catch(e:any){ console.error('[YTMusic] album error:', shortError(e)); res.status(502).json({ error: 'YTMUSIC_UPSTREAM_ERROR' }); }
 });
 
 app.get('/api/ytmusic/playlist/:id', async (req,res)=>{
   const id=req.params.id;
+  if (!BROWSE_ID.test(id)) return res.status(400).json({ error: 'INVALID_ID' });
   try { const yt=await getYTMusic(); const pl=await yt.getPlaylist(id); res.json(pl); }
-  catch(e:any){ console.error('[YTMusic] playlist error:', shortError(e)); res.status(500).json({ error: shortError(e) }); }
+  catch(e:any){ console.error('[YTMusic] playlist error:', shortError(e)); res.status(502).json({ error: 'YTMUSIC_UPSTREAM_ERROR' }); }
 });
 
 app.get('/api/ytmusic/playlist/:id/videos', async (req,res)=>{
   const id=req.params.id;
+  if (!BROWSE_ID.test(id)) return res.status(400).json({ error: 'INVALID_ID' });
   try { const yt=await getYTMusic(); const vids=await yt.getPlaylistVideos(id); res.json(vids); }
-  catch(e:any){ console.error('[YTMusic] playlist videos error:', shortError(e)); res.status(500).json({ error: shortError(e) }); }
+  catch(e:any){ console.error('[YTMusic] playlist videos error:', shortError(e)); res.status(502).json({ error: 'YTMUSIC_UPSTREAM_ERROR' }); }
 });
 
 app.get('/api/ytmusic/artist/:id', async (req,res)=>{
   const id=req.params.id;
+  if (!BROWSE_ID.test(id)) return res.status(400).json({ error: 'INVALID_ID' });
   try { const yt=await getYTMusic(); const artist=await yt.getArtist(id); res.json(artist); }
-  catch(e:any){ console.error('[YTMusic] artist error:', shortError(e)); res.status(500).json({ error: shortError(e) }); }
+  catch(e:any){ console.error('[YTMusic] artist error:', shortError(e)); res.status(502).json({ error: 'YTMUSIC_UPSTREAM_ERROR' }); }
 });
 
 app.get('/api/ytmusic/artist/:id/songs', async (req,res)=>{
   const id=req.params.id;
+  if (!BROWSE_ID.test(id)) return res.status(400).json({ error: 'INVALID_ID' });
   try { const yt=await getYTMusic(); const songs=await yt.getArtistSongs(id); res.json(songs); }
-  catch(e:any){ console.error('[YTMusic] artist songs error:', shortError(e)); res.status(500).json({ error: shortError(e) }); }
+  catch(e:any){ console.error('[YTMusic] artist songs error:', shortError(e)); res.status(502).json({ error: 'YTMUSIC_UPSTREAM_ERROR' }); }
 });
 
 app.get('/api/ytmusic/artist/:id/albums', async (req,res)=>{
   const id=req.params.id;
+  if (!BROWSE_ID.test(id)) return res.status(400).json({ error: 'INVALID_ID' });
   try { const yt=await getYTMusic(); const albums=await yt.getArtistAlbums(id); res.json(albums); }
-  catch(e:any){ console.error('[YTMusic] artist albums error:', shortError(e)); res.status(500).json({ error: shortError(e) }); }
+  catch(e:any){ console.error('[YTMusic] artist albums error:', shortError(e)); res.status(502).json({ error: 'YTMUSIC_UPSTREAM_ERROR' }); }
 });
 
 // JioSaavn proxy endpoint — hardened for Vercel serverless (datacenter IPs get

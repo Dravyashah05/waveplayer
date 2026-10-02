@@ -108,9 +108,21 @@ export async function fetchAutoplay(seed: Track, excludeIds: string[], limit = 8
   return data ? tracksOf(data) : [];
 }
 
-export async function fetchRadio(seed: Track, limit = 20): Promise<Track[]> {
+export async function fetchRadio(seed: Track, limit = 20, excludeIds: string[] = []): Promise<Track[]> {
   if (!seed?.id || !/^[a-zA-Z0-9_-]{11}$/.test(seed.id)) return [];
-  const data = await getJson(`${BASE}/radio/${seed.id}?limit=${limit}`);
+  const qs = new URLSearchParams({ limit: String(limit) });
+  // Server already supports ?exclude= (≤50 video ids); client filters too.
+  const clean = excludeIds.filter((id) => /^[a-zA-Z0-9_-]{11}$/.test(id)).slice(0, 50);
+  if (clean.length) qs.set('exclude', clean.join(','));
+  const data = await getJson(`${BASE}/radio/${seed.id}?${qs}`);
+  return data ? tracksOf(data) : [];
+}
+
+/** Artist top tracks via the existing artist endpoint (no new backend). */
+export async function fetchArtistTop(artistId: string): Promise<Track[]> {
+  const id = String(artistId || '').trim();
+  if (!id || id.length > 100) return [];
+  const data = await getJson(`${BASE}/artist/${encodeURIComponent(id)}`);
   return data ? tracksOf(data) : [];
 }
 

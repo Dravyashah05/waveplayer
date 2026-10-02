@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { Track } from '../types';
 import { playerStore } from '../services/playerStore';
-import { getSimilarTracks } from '../services/recommendationEngine';
+import { startRadioAndPlay } from '../services/radioEngine';
 import {
   canDownloadOffline,
   cancelOfflineDownload,
@@ -99,9 +99,9 @@ export const SongContextMenu: React.FC<SongContextMenuProps> = ({
     onClose();
     onShowToast?.(`Starting radio for "${track.title}"...`);
     try {
-      const similar = await getSimilarTracks(track.id, 20);
-      const radioQueue = [track, ...similar.filter((t) => t.id !== track.id)];
-      playerStore.setQueue(radioQueue, 0);
+      // Smart track radio: server relations + local engine, session-tracked,
+      // infinite extension via autoplay. Falls back to the seed alone.
+      await startRadioAndPlay('track', { track });
     } catch {
       playerStore.setQueue([track], 0);
     }
@@ -213,6 +213,7 @@ export const SongContextMenu: React.FC<SongContextMenuProps> = ({
             </div>
             <button
               onClick={onClose}
+              aria-label="Close menu"
               className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-white/50 hover:bg-white/15 hover:text-white transition-colors shrink-0"
             >
               <X className="h-4 w-4" />

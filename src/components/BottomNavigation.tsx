@@ -5,9 +5,10 @@ import { settingsStore } from '../services/settingsStore';
 interface Props {
   active: string;
   onChange: (s: string) => void;
+  onPrefetch?: (s: string) => void;
 }
 
-export const BottomNavigation: React.FC<Props> = ({ active, onChange }) => {
+export const BottomNavigation: React.FC<Props> = ({ active, onChange, onPrefetch }) => {
   const [glassIntensity, setGlassIntensity] = useState(() => settingsStore.get().glassIntensity);
   const [glassEnabled, setGlassEnabled] = useState(() => settingsStore.get().glassEnabled);
   useEffect(() => {
@@ -51,6 +52,8 @@ export const BottomNavigation: React.FC<Props> = ({ active, onChange }) => {
             <button
               key={it.id}
               onClick={() => onChange(it.id)}
+              onMouseEnter={() => onPrefetch?.(it.id)}
+              onFocus={() => onPrefetch?.(it.id)}
               className={`relative flex flex-1 flex-col items-center gap-1 rounded-[16px] px-3 py-2 text-[11px] font-[650] tracking-[-0.01em] transition-all overflow-hidden isolate ${activeState ? 'text-black' : 'text-[#9a9aa0] hover:text-white'}`}
             >
               {activeState && (

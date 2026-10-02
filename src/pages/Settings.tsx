@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Settings2, Palette, Trash2, Info, Check, Play, SlidersHorizontal, Wifi, Mic2, Sparkles, Plug, FlaskConical, FolderDown } from 'lucide-react';
 import { settingsStore, AppSettings, Quality, Theme, NetworkQuality, EqPresetId } from '../services/settingsStore';
 import { playerStore } from '../services/playerStore';
@@ -43,8 +44,8 @@ export const SettingsPage: React.FC = () => {
     settingsStore.set(k, v);
   };
 
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
   const clearAll = () => {
-    if (!confirm('Clear all Wave data?')) return;
     ['wave:queue', 'wave:index', 'wave:fav', 'wave:history', 'wave:shuffle', 'wave:repeat', 'wave:volume', 'wave:local_playlists', 'wave:recent_searches', 'wave:settings'].forEach((k) => localStorage.removeItem(k));
     clearScopedKey('yt_history_v1');
     settingsStore.reset();
@@ -346,8 +347,19 @@ export const SettingsPage: React.FC = () => {
             <p className="text-[13px] font-medium text-white">Clear all data</p>
             <p className="text-xs text-white/40">Queue • History • Favorites • Playlists</p>
           </div>
-          <button onClick={clearAll} className="rounded-full bg-white text-black px-4 py-1.5 text-xs font-bold hover:bg-white/90">Clear</button>
+          <button onClick={() => setConfirmClearAll(true)} className="rounded-full bg-white text-black px-4 py-1.5 text-xs font-bold hover:bg-white/90">Clear</button>
         </div>
+        <ConfirmDialog
+          open={confirmClearAll}
+          title="Clear all Wave data?"
+          body="Queue, history, favorites and playlists on this device will be removed. This cannot be undone."
+          confirmLabel="Clear everything"
+          onCancel={() => setConfirmClearAll(false)}
+          onConfirm={() => {
+            setConfirmClearAll(false);
+            clearAll();
+          }}
+        />
       </div>
 
       <div className="rounded-2xl border border-white/10 lg-surface p-4 flex items-center gap-3" style={glassCardStyle}>
@@ -641,12 +653,12 @@ const LocalFilesCard: React.FC = () => {
 };
 
 const LocalFileRow: React.FC<{ meta: LocalFileMeta; onChange: () => void }> = ({ meta, onChange }) => {
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const play = async () => {
     const t = await playLocalFile(meta).catch(() => null);
     if (t) playerStore.setQueue([t], 0);
   };
   const remove = async () => {
-    if (!confirm(`Remove "${meta.title}" from local files?`)) return;
     await deleteLocalFile(meta.id).catch(() => {});
     onChange();
   };
@@ -659,9 +671,20 @@ const LocalFileRow: React.FC<{ meta: LocalFileMeta; onChange: () => void }> = ({
       <button type="button" onClick={() => void play()} className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black" aria-label={`Play ${meta.title}`}>
         <Play className="h-3.5 w-3.5 fill-current ml-0.5" />
       </button>
-      <button type="button" onClick={() => void remove()} className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-white/40 hover:text-red-400" aria-label={`Remove ${meta.title}`}>
+      <button type="button" onClick={() => setConfirmRemove(true)} className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 text-white/40 hover:text-red-400" aria-label={`Remove ${meta.title}`}>
         <Trash2 className="h-3.5 w-3.5" />
       </button>
+      <ConfirmDialog
+        open={confirmRemove}
+        title={`Remove “${meta.title}”?`}
+        body="The file reference will be removed from your local library. This cannot be undone."
+        confirmLabel="Remove file"
+        onCancel={() => setConfirmRemove(false)}
+        onConfirm={() => {
+          setConfirmRemove(false);
+          void remove();
+        }}
+      />
     </div>
   );
 };

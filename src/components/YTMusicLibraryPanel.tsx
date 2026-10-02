@@ -33,6 +33,7 @@ import { SongRow } from './SongRow';
 import { NoContent } from './NoContent';
 import { SongContextMenu } from './SongContextMenu';
 import { AddToPlaylistModal } from './AddToPlaylistModal';
+import { subscribeLibraryChanged, subscribeSync } from '../services/accountSync';
 
 type YTCategory = 'playlists' | 'liked' | 'songs' | 'albums' | 'artists' | 'history';
 
@@ -224,6 +225,15 @@ export const YTMusicLibraryPanel: React.FC<YTMusicLibraryPanelProps> = ({
     },
     [loadPlaylists, loadTracks, loadAlbums, loadArtists],
   );
+
+  // Refresh the visible category after an explicit sync (reconnect, Sync
+  // button, or playlist mutation). Single reload, no polling.
+  const categoryRef = React.useRef(category);
+  categoryRef.current = category;
+  useEffect(() => subscribeSync((r) => {
+    if (r.status === 'success' || r.status === 'partial') loadCategory(categoryRef.current);
+  }), [loadCategory]);
+  useEffect(() => subscribeLibraryChanged(() => loadCategory(categoryRef.current)), [loadCategory]);
 
   // Lazy: fetch the active category on first open (after auth is confirmed).
   useEffect(() => {

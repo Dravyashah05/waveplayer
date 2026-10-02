@@ -40,6 +40,8 @@ import { usePlayerEngine } from '../services/playerEngine';
 import { SongRow } from '../components/SongRow';
 import { SongContextMenu } from '../components/SongContextMenu';
 import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
+import { ArtworkImage } from '../components/ArtworkImage';
+import { SectionHeader } from '../components/ui/SectionHeader';
 
 interface AlbumPageProps {
   albumId?: string;
@@ -360,11 +362,12 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
                 className="group relative cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
               >
                 <div className="relative aspect-square w-full overflow-hidden rounded-[16px] bg-[#141416] ring-1 ring-white/10">
-                  <img
+                  <ArtworkImage
                     src={a.thumbnails?.[0]?.url || ''}
                     alt={a.name}
                     loading="lazy"
                     className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    referrerPolicy="no-referrer"
                   />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                     <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-black shadow-lg">
@@ -465,10 +468,11 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
         {/* Ambient Blur Backdrop */}
         {coverUrl && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            <img
+            <ArtworkImage
               src={coverUrl}
               alt=""
               className="h-full w-full object-cover scale-150 blur-[60px] opacity-35"
+              referrerPolicy="no-referrer"
             />
             <div className="absolute inset-0 bg-gradient-to-r from-black/95 via-black/80 to-black/50" />
             <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent" />
@@ -478,10 +482,11 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
         <div className="relative flex flex-col sm:flex-row items-center sm:items-end gap-6 sm:gap-8">
           {/* Cover Art */}
           <div className="relative h-[190px] w-[190px] sm:h-[220px] sm:w-[220px] shrink-0 rounded-[24px] overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] ring-1 ring-white/20 bg-[#161619]">
-            <img
+            <ArtworkImage
               src={coverUrl}
               alt={album?.name || 'Album'}
               className="h-full w-full object-cover"
+              referrerPolicy="no-referrer"
             />
           </div>
 
@@ -541,7 +546,7 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
                 type="button"
                 onClick={handlePlayAll}
                 disabled={tracks.length === 0}
-                className="flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[14px] font-bold text-black hover:bg-white/90 shadow-[0_4px_12px_rgba(0,0,0,0.4)] active:scale-95 transition-all disabled:opacity-50"
+                className="flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[14px] font-bold text-black hover:bg-white/90 shadow-[0_4px_12px_rgba(0,0,0,0.4)] active:scale-95 transition-all disabled:opacity-50 touch-target"
               >
                 <Play className="h-4 w-4 fill-current ml-0.5" /> Play All
               </button>
@@ -550,7 +555,7 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
                 type="button"
                 onClick={handleShuffle}
                 disabled={tracks.length === 0}
-                className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-5 text-[14px] font-semibold text-white transition-all active:scale-95 disabled:opacity-50"
+                className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-5 text-[14px] font-semibold text-white transition-all active:scale-95 disabled:opacity-50 touch-target"
               >
                 <Shuffle className="h-4 w-4" /> Shuffle
               </button>
@@ -558,12 +563,13 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
               <button
                 type="button"
                 onClick={handleToggleFavAlbum}
-                className={`flex h-11 w-11 items-center justify-center rounded-full border transition-all active:scale-95 ${
+                className={`flex h-11 w-11 items-center justify-center rounded-full border transition-all active:scale-95 touch-target ${
                   isAlbumFav
                     ? 'bg-red-500/20 border-red-500/40 text-red-400'
                     : 'bg-white/[0.08] hover:bg-white/[0.14] border-white/[0.1] text-white'
                 }`}
                 title={isAlbumFav ? 'Liked' : 'Like Album'}
+                aria-label={isAlbumFav ? 'Liked' : 'Like Album'}
               >
                 <Heart className={`h-4 w-4 ${isAlbumFav ? 'fill-red-400' : ''}`} />
               </button>
@@ -784,11 +790,10 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
       ) : (
         recommendedAlbums.length > 0 && (
         <div className="space-y-3.5 pt-4">
-          <div className="flex items-center justify-between px-1">
-            <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
-              <Disc3 className="h-5 w-5 text-amber-400" /> More from {album?.artist?.name || 'this Artist'}
-            </h2>
-          </div>
+          <SectionHeader
+            title={`More from ${album?.artist?.name || 'this Artist'}`}
+            icon={<Disc3 className="h-5 w-5 text-amber-400" />}
+          />
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
             {recommendedAlbums.map((rec) => (
@@ -808,11 +813,12 @@ export const AlbumPage: React.FC<AlbumPageProps> = ({
                 className="group cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
               >
                 <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
-                  <img
+                  <ArtworkImage
                     src={rec.thumbnails?.[0]?.url || ''}
                     alt={rec.name}
                     loading="lazy"
                     className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    referrerPolicy="no-referrer"
                   />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                     <span className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center shadow-lg">

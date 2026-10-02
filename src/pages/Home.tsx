@@ -39,6 +39,8 @@ import { TrackRail, RailSkeleton, GridSkeleton, formatResumeLabel } from '../com
 import { useGoogleAccount } from '../hooks/useGoogleAccount';
 import { SongContextMenu } from '../components/SongContextMenu';
 import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
+import { ArtworkImage } from '../components/ArtworkImage';
+import { SectionHeader } from '../components/ui/SectionHeader';
 
 // Time-of-day greeting generator
 function getDynamicGreeting(userName?: string | null): { greeting: string; caption: string } {
@@ -111,39 +113,16 @@ const RailHeader: React.FC<{
   action2Text?: string;
   onAction2?: () => void;
 }> = ({ title, subtitle, icon, actionText, onAction, action2Text, onAction2 }) => (
-  <div className="flex items-end justify-between gap-4 mb-3.5">
-    <div className="min-w-0">
-      <h2 className="flex items-center gap-2 text-[17px] sm:text-[20px] font-extrabold tracking-[-0.02em] text-white">
-        {icon && (
-          <span className="flex h-6 w-6 sm:h-7 sm:w-7 items-center justify-center rounded-full bg-white/[0.08] text-white shrink-0">
-            {icon}
-          </span>
-        )}
-        <span className="truncate">{title}</span>
-      </h2>
-      {subtitle && <p className="mt-0.5 text-xs sm:text-[13px] font-medium text-[#8e8e93] truncate">{subtitle}</p>}
-    </div>
-    <div className="flex items-center gap-2 shrink-0">
-      {onAction2 && (
-        <button
-          type="button"
-          onClick={onAction2}
-          className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] border border-white/[0.08] px-3 sm:px-3.5 py-1.5 text-xs font-semibold text-white/80 hover:bg-white hover:text-black transition-all shrink-0"
-        >
-          <Radio className="h-3 w-3" /> {action2Text || 'Radio'}
-        </button>
-      )}
-      {onAction && (
-        <button
-          type="button"
-          onClick={onAction}
-          className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] border border-white/[0.08] px-3 sm:px-3.5 py-1.5 text-xs font-semibold text-white/80 hover:bg-white hover:text-black transition-all shrink-0"
-        >
-          {actionText || 'See all'} <ChevronRight className="h-3 w-3" />
-        </button>
-      )}
-    </div>
-  </div>
+  <SectionHeader
+    title={title}
+    subtitle={subtitle}
+    icon={icon}
+    actionLabel={actionText || (onAction ? 'See all' : undefined)}
+    onAction={onAction}
+    action2Label={action2Text}
+    onAction2={onAction2}
+    action2Icon={<Radio className="h-3 w-3" />}
+  />
 );
 
 export const HomePage: React.FC<{
@@ -375,15 +354,12 @@ export const HomePage: React.FC<{
                     >
                       {/* Thumbnail with overlay play */}
                       <div className="relative h-12 w-12 sm:h-14 sm:w-14 shrink-0 overflow-hidden rounded-[14px] bg-[#1a1a1c] ring-1 ring-white/10 shadow-sm">
-                        <img
+                        <ArtworkImage
                           src={track.thumbnail}
                           alt={track.title}
                           loading="lazy"
                           className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                          onError={(e) => {
-                            const img = e.currentTarget as HTMLImageElement;
-                            if (img.src.includes('maxresdefault')) img.src = img.src.replace('maxresdefault', 'hqdefault');
-                          }}
+                          referrerPolicy="no-referrer"
                         />
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           {isActive && isPlaying ? (
@@ -482,7 +458,7 @@ export const HomePage: React.FC<{
                       className="snap-start group cursor-pointer min-w-[155px] w-[155px] sm:min-w-[175px] sm:w-[175px] shrink-0"
                     >
                       <div className="relative aspect-square overflow-hidden rounded-[20px] bg-[#18181b] ring-1 ring-white/10 shadow-[0_8px_24px_rgba(0,0,0,0.4)]">
-                        <img
+                        <ArtworkImage
                           src={track.thumbnail}
                           alt={track.title}
                           loading="lazy"
@@ -768,7 +744,7 @@ export const HomePage: React.FC<{
                     className="group relative cursor-pointer rounded-[22px] border border-white/10 bg-white/[0.03] p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-[0_8px_20px_rgba(0,0,0,0.3)] backdrop-blur-md"
                   >
                     <div className="relative aspect-square w-full overflow-hidden rounded-[16px] bg-[#141416] ring-1 ring-white/10">
-                      <img
+                      <ArtworkImage
                         src={album.thumbnails?.[0]?.url || ''}
                         alt={album.name}
                         loading="lazy"
@@ -823,7 +799,7 @@ export const HomePage: React.FC<{
                     className="group flex flex-col items-center text-center cursor-pointer p-2 rounded-2xl hover:bg-white/[0.04] transition-all"
                   >
                     <div className="relative aspect-square w-full max-w-[120px] rounded-full overflow-hidden bg-[#18181b] ring-2 ring-white/10 shadow-[0_8px_20px_rgba(0,0,0,0.4)] group-hover:ring-white/30 transition-all">
-                      <img
+                      <ArtworkImage
                         src={artist.thumbnails?.[0]?.url || ''}
                         alt={artist.name}
                         loading="lazy"
@@ -903,7 +879,7 @@ export const HomePage: React.FC<{
                     className="group relative cursor-pointer rounded-[22px] border border-white/10 bg-white/[0.03] p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
                   >
                     <div className="relative aspect-square w-full overflow-hidden rounded-[16px] bg-[#141416] ring-1 ring-white/10">
-                      <img
+                      <ArtworkImage
                         src={pl.thumbnails?.[0]?.url || ''}
                         alt={pl.name}
                         loading="lazy"

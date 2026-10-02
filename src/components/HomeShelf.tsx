@@ -2,6 +2,7 @@ import React from 'react';
 import { Play, MoreVertical } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { Track } from '../types';
+import { ArtworkImage } from './ArtworkImage';
 
 /**
  * Shared Home shelf primitives: horizontal track rail + per-section
@@ -81,9 +82,9 @@ export const TrackRail: React.FC<TrackRailProps> = ({
               className={`group block cursor-pointer text-left ${minWidth}`}
             >
               <span className={`relative block aspect-square overflow-hidden rounded-[20px] bg-[#18181b] shadow-md ${isActive ? 'ring-2 ring-white' : 'ring-1 ring-white/10'}`}>
-                <img
+                <ArtworkImage
                   src={track.thumbnail}
-                  alt=""
+                  alt={track.title}
                   loading="lazy"
                   className={`h-full w-full object-cover ${reduceMotion ? '' : 'transition-transform duration-500 group-hover:scale-105'}`}
                   referrerPolicy="no-referrer"

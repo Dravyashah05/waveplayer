@@ -47,6 +47,9 @@ import { startRadioAndPlay } from '../services/radioEngine';
 import { SongRow } from '../components/SongRow';
 import { SongContextMenu } from '../components/SongContextMenu';
 import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
+import { FilterChips } from '../components/ui/FilterChips';
+import { ArtworkImage } from '../components/ArtworkImage';
+import { SectionHeader } from '../components/ui/SectionHeader';
 
 const FILTERS: { id: SearchFilter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -470,29 +473,19 @@ export const SearchPage: React.FC<{
           </AnimatePresence>
         </div>
 
-        {/* Filter Tabs (All, Songs, Videos, Artists, Albums, Playlists) */}
+        {/* Filter Chips (All, Songs, Videos, Artists, Albums, Playlists) */}
         {(query.trim().length > 0 || searched) && (
-          <div className="max-w-3xl mx-auto mt-3 flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-0.5">
-            {FILTERS.map((f) => {
-              const active = activeFilter === f.id;
-              return (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => {
-                    setActiveFilter(f.id);
-                    if (query.trim()) void performSearch(query, f.id);
-                  }}
-                  className={`shrink-0 rounded-full px-4 py-1.5 text-xs sm:text-[13px] font-bold border transition-all ${
-                    active
-                      ? 'bg-white text-black border-white shadow-sm'
-                      : 'bg-white/[0.04] text-white/60 border-white/[0.08] hover:bg-white/[0.10] hover:text-white'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              );
-            })}
+          <div className="max-w-3xl mx-auto mt-2.5">
+            <FilterChips
+              items={FILTERS}
+              activeId={activeFilter}
+              onChange={(id) => {
+                const nextFilter = id as SearchFilter;
+                setActiveFilter(nextFilter);
+                if (query.trim()) void performSearch(query, nextFilter);
+              }}
+              layoutIdPrefix="search-filter"
+            />
           </div>
         )}
       </div>
@@ -570,11 +563,10 @@ export const SearchPage: React.FC<{
             {/* Trending Now Rail */}
             {browseTrending.length > 0 && (
               <div className="space-y-3.5">
-                <div className="flex items-center justify-between px-1">
-                  <h2 className="text-[17px] sm:text-[19px] font-extrabold text-white tracking-tight flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-orange-400" /> Trending Music
-                  </h2>
-                </div>
+                <SectionHeader
+                  title="Trending Music"
+                  icon={<Sparkles className="h-4 w-4 text-orange-400" />}
+                />
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
                   {browseTrending.slice(0, 8).map((track, idx) => {
                     const isActive = currentTrack?.id === track.id;
@@ -584,12 +576,12 @@ export const SearchPage: React.FC<{
                         onClick={() => onPlay(track, browseTrending)}
                         className={`group flex items-center gap-3 p-2 rounded-[16px] border transition-all cursor-pointer select-none ${
                           isActive
-                            ? 'bg-white/[0.12] border-white/20'
+                            ? 'bg-white/[0.12] border-white/20 shadow-sm'
                             : 'bg-white/[0.03] border-white/[0.06] hover:bg-white/[0.08] hover:border-white/15'
                         }`}
                       >
                         <div className="relative h-11 w-11 rounded-[12px] overflow-hidden bg-[#1a1a1c] shrink-0 ring-1 ring-white/10">
-                          <img
+                          <ArtworkImage
                             src={track.thumbnail}
                             alt={track.title}
                             className="h-full w-full object-cover"
@@ -616,11 +608,10 @@ export const SearchPage: React.FC<{
             {/* New Release Albums */}
             {browseAlbums.length > 0 && (
               <div className="space-y-3.5">
-                <div className="flex items-center justify-between px-1">
-                  <h2 className="text-[17px] sm:text-[19px] font-extrabold text-white tracking-tight flex items-center gap-2">
-                    <Disc3 className="h-4 w-4 text-cyan-400" /> New Releases
-                  </h2>
-                </div>
+                <SectionHeader
+                  title="New Releases"
+                  icon={<Disc3 className="h-4 w-4 text-cyan-400" />}
+                />
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
                   {browseAlbums.map((album) => (
                     <div
@@ -629,7 +620,7 @@ export const SearchPage: React.FC<{
                       className="group cursor-pointer rounded-[20px] bg-white/[0.03] border border-white/10 p-2.5 hover:bg-white/[0.08] hover:border-white/20 transition-all"
                     >
                       <div className="relative aspect-square w-full rounded-[14px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
-                        <img
+                        <ArtworkImage
                           src={album.thumbnails?.[0]?.url || ''}
                           alt={album.name}
                           className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
@@ -781,7 +772,7 @@ export const SearchPage: React.FC<{
                         >
                           <div className="flex items-center gap-4">
                             <div className="relative h-24 w-24 rounded-full overflow-hidden bg-[#18181b] ring-2 ring-white/20 shrink-0 shadow-lg">
-                              <img
+                              <ArtworkImage
                                 src={(results.topResult.item as SearchArtist).thumbnails?.[0]?.url || ''}
                                 alt={(results.topResult.item as SearchArtist).name}
                                 className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
@@ -835,7 +826,7 @@ export const SearchPage: React.FC<{
                         >
                           <div className="flex items-center gap-4">
                             <div className="relative h-24 w-24 rounded-[20px] overflow-hidden bg-[#18181b] ring-1 ring-white/20 shrink-0 shadow-lg">
-                              <img
+                              <ArtworkImage
                                 src={(results.topResult.item as Track).thumbnail}
                                 alt={(results.topResult.item as Track).title}
                                 className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
@@ -895,7 +886,7 @@ export const SearchPage: React.FC<{
                         >
                           <div className="flex items-center gap-4">
                             <div className="relative h-24 w-24 rounded-[20px] overflow-hidden bg-[#18181b] ring-1 ring-white/20 shrink-0 shadow-lg">
-                              <img
+                              <ArtworkImage
                                 src={(results.topResult.item as Album).thumbnails?.[0]?.url || ''}
                                 alt={(results.topResult.item as Album).name}
                                 className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
@@ -938,7 +929,7 @@ export const SearchPage: React.FC<{
                         >
                           <div className="flex items-center gap-4">
                             <div className="relative h-24 w-24 rounded-[20px] overflow-hidden bg-[#18181b] ring-1 ring-white/20 shrink-0 shadow-lg">
-                              <img
+                              <ArtworkImage
                                 src={(results.topResult.item as Playlist).thumbnails?.[0]?.url || ''}
                                 alt={(results.topResult.item as Playlist).name}
                                 className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
@@ -1014,19 +1005,13 @@ export const SearchPage: React.FC<{
 
                 {/* Artists Rail */}
                 {results.artists.length > 0 && (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between px-1">
-                      <h3 className="text-[17px] sm:text-[19px] font-extrabold text-white tracking-tight flex items-center gap-2">
-                        <Mic2 className="h-4 w-4 text-purple-400" /> Artists
-                      </h3>
-                      <button
-                        type="button"
-                        onClick={() => setActiveFilter('artists')}
-                        className="inline-flex items-center gap-1 text-xs font-bold text-white/60 hover:text-white transition-colors"
-                      >
-                        See all <ChevronRight className="h-3 w-3" />
-                      </button>
-                    </div>
+                  <div className="space-y-3.5">
+                    <SectionHeader
+                      title="Artists"
+                      icon={<Mic2 className="h-4 w-4 text-purple-400" />}
+                      actionLabel="See all"
+                      onAction={() => setActiveFilter('artists')}
+                    />
 
                     <div className="flex gap-4 overflow-x-auto scrollbar-none pb-2 -mx-1 px-1">
                       {results.artists.slice(0, 8).map((artist) => (
@@ -1039,7 +1024,7 @@ export const SearchPage: React.FC<{
                           className="group flex flex-col items-center text-center cursor-pointer min-w-[120px] w-[120px] shrink-0 p-2 rounded-2xl hover:bg-white/[0.04] transition-all"
                         >
                           <div className="relative aspect-square w-full rounded-full overflow-hidden bg-[#18181b] ring-2 ring-white/10 group-hover:ring-white/30 shadow-md transition-all">
-                            <img
+                            <ArtworkImage
                               src={artist.thumbnails?.[0]?.url || ''}
                               alt={artist.name}
                               loading="lazy"
@@ -1063,19 +1048,13 @@ export const SearchPage: React.FC<{
 
                 {/* Albums Rail */}
                 {results.albums.length > 0 && (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between px-1">
-                      <h3 className="text-[17px] sm:text-[19px] font-extrabold text-white tracking-tight flex items-center gap-2">
-                        <Disc3 className="h-4 w-4 text-cyan-400" /> Albums
-                      </h3>
-                      <button
-                        type="button"
-                        onClick={() => setActiveFilter('albums')}
-                        className="inline-flex items-center gap-1 text-xs font-bold text-white/60 hover:text-white transition-colors"
-                      >
-                        See all <ChevronRight className="h-3 w-3" />
-                      </button>
-                    </div>
+                  <div className="space-y-3.5">
+                    <SectionHeader
+                      title="Albums"
+                      icon={<Disc3 className="h-4 w-4 text-cyan-400" />}
+                      actionLabel="See all"
+                      onAction={() => setActiveFilter('albums')}
+                    />
 
                     <div className="flex gap-4 overflow-x-auto scrollbar-none pb-2 -mx-1 px-1">
                       {results.albums.slice(0, 8).map((album) => (
@@ -1088,7 +1067,7 @@ export const SearchPage: React.FC<{
                           className="group cursor-pointer min-w-[145px] w-[145px] sm:min-w-[165px] sm:w-[165px] shrink-0 rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all"
                         >
                           <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
-                            <img
+                            <ArtworkImage
                               src={album.thumbnails?.[0]?.url || ''}
                               alt={album.name}
                               loading="lazy"
@@ -1114,19 +1093,13 @@ export const SearchPage: React.FC<{
 
                 {/* Playlists Rail */}
                 {results.playlists.length > 0 && (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between px-1">
-                      <h3 className="text-[17px] sm:text-[19px] font-extrabold text-white tracking-tight flex items-center gap-2">
-                        <ListMusic className="h-4 w-4 text-amber-400" /> Playlists
-                      </h3>
-                      <button
-                        type="button"
-                        onClick={() => setActiveFilter('playlists')}
-                        className="inline-flex items-center gap-1 text-xs font-bold text-white/60 hover:text-white transition-colors"
-                      >
-                        See all <ChevronRight className="h-3 w-3" />
-                      </button>
-                    </div>
+                  <div className="space-y-3.5">
+                    <SectionHeader
+                      title="Playlists"
+                      icon={<ListMusic className="h-4 w-4 text-amber-400" />}
+                      actionLabel="See all"
+                      onAction={() => setActiveFilter('playlists')}
+                    />
 
                     <div className="flex gap-4 overflow-x-auto scrollbar-none pb-2 -mx-1 px-1">
                       {results.playlists.slice(0, 8).map((playlist) => (
@@ -1139,7 +1112,7 @@ export const SearchPage: React.FC<{
                           className="group cursor-pointer min-w-[145px] w-[145px] sm:min-w-[165px] sm:w-[165px] shrink-0 rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all"
                         >
                           <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
-                            <img
+                            <ArtworkImage
                               src={playlist.thumbnails?.[0]?.url || ''}
                               alt={playlist.name}
                               loading="lazy"
@@ -1239,7 +1212,7 @@ export const SearchPage: React.FC<{
                       className="group flex flex-col items-center text-center cursor-pointer p-3 rounded-[24px] bg-white/[0.03] border border-white/10 hover:bg-white/[0.07] hover:border-white/20 transition-all"
                     >
                       <div className="relative aspect-square w-28 sm:w-32 rounded-full overflow-hidden bg-[#18181b] ring-2 ring-white/10 group-hover:ring-white/30 shadow-lg transition-all">
-                        <img
+                        <ArtworkImage
                           src={artist.thumbnails?.[0]?.url || ''}
                           alt={artist.name}
                           loading="lazy"
@@ -1280,7 +1253,7 @@ export const SearchPage: React.FC<{
                       className="group cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all"
                     >
                       <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
-                        <img
+                        <ArtworkImage
                           src={album.thumbnails?.[0]?.url || ''}
                           alt={album.name}
                           loading="lazy"
@@ -1323,7 +1296,7 @@ export const SearchPage: React.FC<{
                       className="group cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all"
                     >
                       <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
-                        <img
+                        <ArtworkImage
                           src={playlist.thumbnails?.[0]?.url || ''}
                           alt={playlist.name}
                           loading="lazy"

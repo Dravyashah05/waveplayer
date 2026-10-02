@@ -20,6 +20,7 @@ import {
 import { Track } from '../types';
 import { playerStore } from '../services/playerStore';
 import { startRadioAndPlay } from '../services/radioEngine';
+import { ArtworkImage } from './ArtworkImage';
 import {
   canDownloadOffline,
   cancelOfflineDownload,
@@ -194,14 +195,10 @@ export const SongContextMenu: React.FC<SongContextMenuProps> = ({
         >
           {/* Track Summary Header */}
           <div className="flex items-center gap-3.5 p-4 border-b border-white/[0.06] bg-white/[0.02]">
-            <img
+            <ArtworkImage
               src={track.thumbnail}
               alt={track.title}
               className="h-12 w-12 rounded-xl object-cover ring-1 ring-white/10 shadow-sm shrink-0"
-              onError={(e) => {
-                const img = e.currentTarget as HTMLImageElement;
-                if (img.src.includes('maxresdefault')) img.src = img.src.replace('maxresdefault', 'hqdefault');
-              }}
             />
             <div className="min-w-0 flex-1">
               <h4 className="truncate text-sm font-bold text-white tracking-tight leading-tight">

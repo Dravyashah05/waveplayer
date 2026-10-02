@@ -1,12 +1,16 @@
 import React from 'react';
 import { ChevronRight } from 'lucide-react';
 
-interface SectionHeaderProps {
+export interface SectionHeaderProps {
   title: string;
   subtitle?: string;
   eyebrow?: string;
   actionLabel?: string;
   onAction?: () => void;
+  actionIcon?: React.ReactNode;
+  action2Label?: string;
+  onAction2?: () => void;
+  action2Icon?: React.ReactNode;
   icon?: React.ReactNode;
   badge?: string;
   className?: string;
@@ -18,6 +22,10 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({
   eyebrow,
   actionLabel,
   onAction,
+  actionIcon,
+  action2Label,
+  onAction2,
+  action2Icon,
   icon,
   badge,
   className = '',
@@ -31,8 +39,12 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({
           </p>
         )}
         <div className="flex items-center gap-2">
-          {icon && <span className="text-white/70 shrink-0">{icon}</span>}
-          <h2 className="text-[18px] min-[400px]:text-[20px] sm:text-[22px] font-bold tracking-[-0.02em] text-white leading-tight truncate">
+          {icon && (
+            <span className="flex h-6 w-6 sm:h-7 sm:w-7 items-center justify-center rounded-xl bg-white/[0.08] text-white shrink-0">
+              {icon}
+            </span>
+          )}
+          <h2 className="text-[18px] min-[400px]:text-[20px] sm:text-[22px] font-black tracking-[-0.02em] text-white leading-tight truncate">
             {title}
           </h2>
           {badge && (
@@ -48,17 +60,31 @@ export const SectionHeader: React.FC<SectionHeaderProps> = ({
         )}
       </div>
 
-      {actionLabel && onAction && (
-        <button
-          type="button"
-          onClick={onAction}
-          className="group inline-flex items-center gap-1 text-[12px] sm:text-[13px] font-semibold text-white/60 hover:text-white transition-colors touch-target px-2 -mr-2 shrink-0 select-none active:scale-95"
-          aria-label={`${actionLabel} - ${title}`}
-        >
-          <span>{actionLabel}</span>
-          <ChevronRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5" />
-        </button>
-      )}
+      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        {action2Label && onAction2 && (
+          <button
+            type="button"
+            onClick={onAction2}
+            className="touch-target inline-flex items-center gap-1.5 rounded-full bg-white/[0.06] hover:bg-white text-white/80 hover:text-black border border-white/[0.08] px-3 py-1.5 text-[12px] font-semibold transition-all active:scale-95 shrink-0"
+            aria-label={`${action2Label} - ${title}`}
+          >
+            {action2Icon}
+            <span>{action2Label}</span>
+          </button>
+        )}
+        {actionLabel && onAction && (
+          <button
+            type="button"
+            onClick={onAction}
+            className="touch-target group inline-flex items-center gap-1 rounded-full bg-white/[0.06] hover:bg-white text-white/80 hover:text-black border border-white/[0.08] px-3 py-1.5 text-[12px] font-semibold transition-all active:scale-95 shrink-0"
+            aria-label={`${actionLabel} - ${title}`}
+          >
+            {actionIcon}
+            <span>{actionLabel}</span>
+            <ChevronRight className="h-3.5 w-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
+          </button>
+        )}
+      </div>
     </div>
   );
 };

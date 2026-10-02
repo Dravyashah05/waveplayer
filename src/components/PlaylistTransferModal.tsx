@@ -4,6 +4,7 @@ import { X, Check, AlertTriangle, MinusCircle, Loader2, ArrowRight } from 'lucid
 import type { Track } from '../types';
 import type { ExportPreview } from '../services/playlistTransfer';
 import type { ImportPreview } from '../services/youtubeImport';
+import { ArtworkImage } from './ArtworkImage';
 
 interface Props {
   isOpen: boolean;
@@ -168,7 +169,7 @@ export const PlaylistTransferModal: React.FC<Props> = ({
                       key={row.key}
                       className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-2.5"
                     >
-                      <img src={row.thumb} alt="" loading="lazy" decoding="async" className="h-9 w-9 rounded-lg object-cover bg-white/5 shrink-0" />
+                      <ArtworkImage src={row.thumb} alt="" loading="lazy" decoding="async" className="h-9 w-9 rounded-lg object-cover bg-white/5 shrink-0" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-semibold text-white">{row.title}</span>
                         <span className="block truncate text-[11px] text-white/45">{row.sub}</span>
@@ -187,7 +188,7 @@ export const PlaylistTransferModal: React.FC<Props> = ({
                       on ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-white/10 bg-white/[0.03] hover:border-white/25'
                     }`}
                   >
-                    <img src={row.thumb} alt="" loading="lazy" decoding="async" className="h-9 w-9 rounded-lg object-cover bg-white/5 shrink-0" />
+                    <ArtworkImage src={row.thumb} alt="" loading="lazy" decoding="async" className="h-9 w-9 rounded-lg object-cover bg-white/5 shrink-0" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[13px] font-semibold text-white">{row.title}</span>
                       <span className="block truncate text-[11px] text-white/45">{row.sub}</span>

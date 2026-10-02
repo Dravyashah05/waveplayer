@@ -33,6 +33,7 @@ import { SongRow } from './SongRow';
 import { NoContent } from './NoContent';
 import { SongContextMenu } from './SongContextMenu';
 import { AddToPlaylistModal } from './AddToPlaylistModal';
+import { ArtworkImage } from './ArtworkImage';
 import { subscribeLibraryChanged, subscribeSync } from '../services/accountSync';
 
 type YTCategory = 'playlists' | 'liked' | 'songs' | 'albums' | 'artists' | 'history';
@@ -545,7 +546,7 @@ export const YTMusicLibraryPanel: React.FC<YTMusicLibraryPanelProps> = ({
                 >
                   <div className="relative aspect-square w-full overflow-hidden rounded-[14px] bg-[#1a1a1c] ring-1 ring-white/10 shadow-sm">
                     {pl.thumbnails?.[0]?.url ? (
-                      <img
+                      <ArtworkImage
                         src={pl.thumbnails[0].url}
                         alt={pl.name}
                         loading="lazy"
@@ -679,7 +680,7 @@ export const YTMusicLibraryPanel: React.FC<YTMusicLibraryPanelProps> = ({
                   >
                     <div className="relative aspect-square w-full overflow-hidden rounded-[14px] bg-[#1a1a1c] ring-1 ring-white/10 shadow-sm">
                       {album.thumbnails?.[0]?.url ? (
-                        <img
+                        <ArtworkImage
                           src={album.thumbnails[0].url}
                           alt={album.name}
                           loading="lazy"
@@ -753,7 +754,7 @@ export const YTMusicLibraryPanel: React.FC<YTMusicLibraryPanelProps> = ({
                   >
                     <div className="relative aspect-square w-full max-w-[140px] overflow-hidden rounded-full bg-[#1a1a1c] ring-2 ring-white/15 shadow-md">
                       {artist.thumbnails?.[0]?.url ? (
-                        <img
+                        <ArtworkImage
                           src={artist.thumbnails[0].url}
                           alt={artist.name}
                           loading="lazy"

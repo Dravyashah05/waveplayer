@@ -245,7 +245,7 @@ export const SongRow: React.FC<SongRowProps> = ({
               e.stopPropagation();
               onRemove();
             }}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/[0.04] border border-white/[0.06] text-[#8e8e93] hover:text-red-300 hover:bg-red-500/10 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity focus-visible:opacity-100"
+            className="touch-target inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.04] border border-white/[0.06] text-[#8e8e93] hover:text-red-300 hover:bg-red-500/10 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity focus-visible:opacity-100 active:scale-95"
             aria-label={`Remove ${track.title} from history`}
             title="Remove from history"
           >
@@ -256,7 +256,7 @@ export const SongRow: React.FC<SongRowProps> = ({
         <button
           type="button"
           onClick={toggleFav}
-          className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition-all ${
+          className={`touch-target inline-flex h-9 w-9 items-center justify-center rounded-full border transition-all active:scale-95 ${
             isFav
               ? 'bg-red-500/20 border-red-500/40 text-red-400 opacity-100 scale-100'
               : 'bg-white/[0.04] border-white/[0.06] text-[#8e8e93] hover:text-white hover:bg-white/[0.10] sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100'
@@ -270,7 +270,7 @@ export const SongRow: React.FC<SongRowProps> = ({
         <button
           type="button"
           onClick={handleMenuClick}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/[0.04] border border-white/[0.06] text-[#8e8e93] hover:text-white hover:bg-white/[0.12] sm:opacity-0 sm:group-hover:opacity-100 transition-opacity focus-visible:opacity-100"
+          className="touch-target inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.04] border border-white/[0.06] text-[#8e8e93] hover:text-white hover:bg-white/[0.12] sm:opacity-0 sm:group-hover:opacity-100 transition-opacity focus-visible:opacity-100 active:scale-95"
           aria-label="More options"
         >
           <MoreVertical className="h-4 w-4" />
@@ -283,14 +283,15 @@ export const SongRow: React.FC<SongRowProps> = ({
             e.stopPropagation();
             onPlay();
           }}
-          className={`sm:hidden inline-flex h-7 w-7 items-center justify-center rounded-full shadow-sm active:scale-95 transition-all ${
+          className={`sm:hidden touch-target inline-flex h-8 w-8 items-center justify-center rounded-full shadow-sm active:scale-90 transition-all ${
             isActive ? 'bg-white text-black' : 'bg-white/10 text-white'
           }`}
+          aria-label={isActive && isPlaying ? 'Pause' : 'Play'}
         >
           {isActive && isPlaying ? (
-            <Pause className="h-3 w-3 fill-current" />
+            <Pause className="h-3.5 w-3.5 fill-current" />
           ) : (
-            <Play className="h-3 w-3 fill-current ml-0.5" />
+            <Play className="h-3.5 w-3.5 fill-current ml-0.5" />
           )}
         </button>
       </div>

@@ -62,6 +62,8 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useDismiss } from '../hooks/useDismiss';
 import { NoContent } from '../components/NoContent';
 import { toast } from '../components/Toast';
+import { ArtworkImage } from '../components/ArtworkImage';
+import { SectionHeader } from '../components/ui/SectionHeader';
 
 interface PlaylistPageProps {
   playlistId?: string;
@@ -738,11 +740,12 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
                 className="group relative cursor-pointer lg-card p-3"
               >
                 <div className="relative aspect-square w-full overflow-hidden rounded-[14px] bg-[#141416] ring-1 ring-white/10">
-                  <img
+                  <ArtworkImage
                     src={p.thumbnails?.[0]?.url || ''}
                     alt={p.name}
                     loading="lazy"
                     className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    referrerPolicy="no-referrer"
                   />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                     <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-black shadow-lg">
@@ -855,7 +858,12 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
       <div className="relative overflow-hidden rounded-[28px] sm:rounded-[32px] lg-hero p-6 sm:p-8 lg:p-10">
         {coverUrl && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
-            <img src={coverUrl} alt="" className="h-full w-full object-cover scale-150 blur-[54px] opacity-35" />
+            <ArtworkImage
+              src={coverUrl}
+              alt=""
+              className="h-full w-full object-cover scale-150 blur-[54px] opacity-35"
+              referrerPolicy="no-referrer"
+            />
             <div className="absolute inset-0 bg-gradient-to-r from-black/95 via-black/80 to-black/50" />
             <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent" />
           </div>
@@ -864,7 +872,12 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
         <div className="relative flex flex-col sm:flex-row items-center sm:items-end gap-6 sm:gap-8">
           <div className="relative h-[190px] w-[190px] sm:h-[220px] sm:w-[220px] shrink-0 rounded-[22px] overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] ring-1 ring-white/20 bg-[#161619]">
             {coverUrl ? (
-              <img src={coverUrl} alt={hero?.title} className="h-full w-full object-cover" />
+              <ArtworkImage
+                src={coverUrl}
+                alt={hero?.title}
+                className="h-full w-full object-cover"
+                referrerPolicy="no-referrer"
+              />
             ) : (
               <div className="grid h-full w-full place-items-center text-white/30">
                 <Music2 className="h-12 w-12" />

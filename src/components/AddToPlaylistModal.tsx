@@ -17,6 +17,7 @@ import {
   listYoutubePlaylists,
 } from '../services/youtubePlaylists';
 import { youtubeVideoIdOf, type UnifiedPlaylist } from '../services/playlistModel';
+import { ArtworkImage } from './ArtworkImage';
 
 interface AddToPlaylistModalProps {
   isOpen: boolean;
@@ -255,7 +256,7 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
                       >
                         <div className="h-10 w-10 rounded-lg bg-red-500/15 border border-red-500/25 flex items-center justify-center text-red-300 font-extrabold text-xs shrink-0 overflow-hidden">
                           {pl.artwork ? (
-                            <img src={pl.artwork} alt="" className="h-full w-full object-cover" />
+                            <ArtworkImage src={pl.artwork} alt="" className="h-full w-full object-cover" />
                           ) : (
                             pl.title.slice(0, 2).toUpperCase()
                           )}

@@ -33,6 +33,7 @@ import { getActiveSession, isRadioGenerated, stopRadio, subscribeRadio } from '.
 import { describeSource, radioReason, type QueueItemMeta } from '../services/queueMeta';
 import { AddToPlaylistModal } from './AddToPlaylistModal';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ArtworkImage } from './ArtworkImage';
 
 interface Props {
   open: boolean;
@@ -423,7 +424,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                             key={`empty-up-${t.id}`}
                             className="flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] p-2.5 backdrop-blur hover:bg-white/[0.06] transition-colors"
                           >
-                            <img src={t.thumbnail} alt={t.title} className="h-11 w-11 rounded-xl object-cover ring-1 ring-white/10 shrink-0" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
+                            <ArtworkImage src={t.thumbnail} alt={t.title} className="h-11 w-11 rounded-xl object-cover ring-1 ring-white/10 shrink-0" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-sm font-semibold leading-none text-white">{t.title}</p>
                               <p className="truncate text-xs text-white/45">{t.author}</p>
@@ -466,7 +467,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                           transition={{ delay: idx * 0.03, duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
                           className="group flex items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] p-2.5 backdrop-blur hover:bg-white/[0.06] hover:border-white/[0.10] transition-colors"
                         >
-                          <img src={t.thumbnail} alt={t.title} className="h-12 w-12 shrink-0 rounded-xl object-cover ring-1 ring-white/10" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
+                          <ArtworkImage src={t.thumbnail} alt={t.title} className="h-12 w-12 shrink-0 rounded-xl object-cover ring-1 ring-white/10" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold leading-tight text-white">{t.title}</p>
                             <p className="truncate text-xs text-white/45">{t.author}</p>
@@ -524,7 +525,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                         <div className="absolute inset-0 bg-gradient-to-br from-white/[0.06] via-transparent to-transparent pointer-events-none" />
                         <div className="relative flex gap-3">
                           <div className="relative h-[76px] w-[76px] shrink-0 overflow-hidden rounded-2xl bg-neutral-900 ring-1 ring-white/10 shadow-[0_8px_20px_rgba(0,0,0,0.4)]">
-                            <img src={now.thumbnail} alt={now.title} className="h-full w-full object-cover" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
+                            <ArtworkImage src={now.thumbnail} alt={now.title} className="h-full w-full object-cover" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
                             <span className="absolute inset-0 grid place-items-center bg-black/20 backdrop-blur-[1px]">
                               <span className="flex items-end gap-0.5 h-4 rounded-full bg-black/45 px-1.5 py-1 backdrop-blur border border-white/10">
@@ -650,7 +651,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                               </button>
 
                               <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-neutral-900 ring-1 ring-white/10">
-                                <img src={t.thumbnail} alt={t.title} className="h-full w-full object-cover" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
+                                <ArtworkImage src={t.thumbnail} alt={t.title} className="h-full w-full object-cover" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                                 <span className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/60 text-[10px] font-bold text-white ring-1 ring-white/10 backdrop-blur">
                                   {realIdx + 1}
                                 </span>
@@ -830,7 +831,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                                       key={`h-${t.id}-${realIdx}`}
                                       className="flex items-center gap-2.5 rounded-2xl border border-white/[0.04] bg-white/[0.01] p-2 opacity-75 hover:opacity-100 transition-opacity"
                                     >
-                                      <img src={t.thumbnail} alt={t.title} className="h-10 w-10 rounded-xl object-cover ring-1 ring-white/5 shrink-0 grayscale-[0.15]" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
+                                      <ArtworkImage src={t.thumbnail} alt={t.title} className="h-10 w-10 rounded-xl object-cover ring-1 ring-white/5 shrink-0 grayscale-[0.15]" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                                       <div className="min-w-0 flex-1">
                                         <p className="truncate text-xs font-semibold text-white/80">{t.title}</p>
                                         <p className="truncate text-[11px] text-white/35">{t.author}</p>
@@ -892,7 +893,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                       <div className="mt-2 flex gap-2 overflow-x-auto scrollbar-none pb-1 -mx-1 px-1">
                         {upNext.slice(0, 6).map((t) => (
                           <div key={`strip-${t.id}`} className="flex w-[160px] shrink-0 items-center gap-2 rounded-2xl border border-white/[0.06] bg-white/[0.04] p-2 backdrop-blur">
-                            <img src={t.thumbnail} alt={t.title} className="h-10 w-10 rounded-xl object-cover ring-1 ring-white/10 shrink-0" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
+                            <ArtworkImage src={t.thumbnail} alt={t.title} className="h-10 w-10 rounded-xl object-cover ring-1 ring-white/10 shrink-0" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-xs font-semibold leading-tight text-white">{t.title}</p>
                               <p className="truncate text-[11px] text-white/40">{t.author}</p>

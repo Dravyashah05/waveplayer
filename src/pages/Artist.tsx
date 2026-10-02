@@ -41,6 +41,8 @@ import { SongRow } from '../components/SongRow';
 import { SongContextMenu } from '../components/SongContextMenu';
 import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
 import { ArtistBio } from '../components/ArtistBio';
+import { ArtworkImage } from '../components/ArtworkImage';
+import { SectionHeader } from '../components/ui/SectionHeader';
 
 interface ArtistPageProps {
   artistId?: string;
@@ -344,11 +346,12 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                 className="group relative cursor-pointer p-4 text-center flex flex-col items-center rounded-[24px] bg-white/[0.03] border border-white/10 hover:bg-white/[0.08] hover:border-white/20 transition-all shadow-sm"
               >
                 <div className="relative aspect-square w-28 sm:w-32 overflow-hidden rounded-full bg-[#141416] ring-2 ring-white/10 group-hover:ring-white/30 shadow-lg transition-all">
-                  <img
+                  <ArtworkImage
                     src={a.thumbnails?.[0]?.url || ''}
                     alt={a.name}
                     loading="lazy"
                     className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
+                    referrerPolicy="no-referrer"
                   />
                   <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                     <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-black shadow-lg">
@@ -452,10 +455,11 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
         {/* Ambient Blur Backdrop */}
         {avatarUrl && (
           <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            <img
+            <ArtworkImage
               src={avatarUrl}
               alt=""
               className="h-full w-full object-cover scale-150 blur-[60px] opacity-35"
+              referrerPolicy="no-referrer"
             />
             <div className="absolute inset-0 bg-gradient-to-r from-black/95 via-black/80 to-black/50" />
             <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent" />
@@ -465,10 +469,11 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
         <div className="relative flex flex-col sm:flex-row items-center sm:items-end gap-6 sm:gap-8">
           {/* Circular Artist Avatar */}
           <div className="relative h-[170px] w-[170px] sm:h-[200px] sm:w-[200px] shrink-0 rounded-full overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] ring-2 ring-white/20 bg-[#161619]">
-            <img
+            <ArtworkImage
               src={avatarUrl}
               alt={artist?.name || 'Artist'}
               className="h-full w-full object-cover"
+              referrerPolicy="no-referrer"
             />
           </div>
 
@@ -505,7 +510,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                 type="button"
                 onClick={handlePlayAll}
                 disabled={topSongs.length === 0}
-                className="flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[14px] font-bold text-black hover:bg-white/90 shadow-[0_4px_12px_rgba(0,0,0,0.4)] active:scale-95 transition-all disabled:opacity-50"
+                className="flex h-11 items-center gap-2 rounded-full bg-white px-6 text-[14px] font-bold text-black hover:bg-white/90 shadow-[0_4px_12px_rgba(0,0,0,0.4)] active:scale-95 transition-all disabled:opacity-50 touch-target"
               >
                 <Play className="h-4 w-4 fill-current ml-0.5" /> Play Top Songs
               </button>
@@ -514,7 +519,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                 type="button"
                 onClick={handleShuffle}
                 disabled={topSongs.length === 0}
-                className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-5 text-[14px] font-semibold text-white transition-all active:scale-95 disabled:opacity-50"
+                className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-5 text-[14px] font-semibold text-white transition-all active:scale-95 disabled:opacity-50 touch-target"
               >
                 <Shuffle className="h-4 w-4" /> Shuffle
               </button>
@@ -522,7 +527,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
               <button
                 type="button"
                 onClick={handleStartRadio}
-                className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-5 text-[14px] font-semibold text-white transition-all active:scale-95"
+                className="flex h-11 items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] px-5 text-[14px] font-semibold text-white transition-all active:scale-95 touch-target"
               >
                 <Radio className="h-4 w-4 text-purple-400" /> Artist Radio
               </button>
@@ -532,7 +537,7 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                 onClick={handleToggleFollow}
                 aria-pressed={followed}
                 title={followed ? 'Unfollow this artist (Wave library)' : 'Follow this artist (Wave library)'}
-                className={`flex h-11 items-center gap-2 rounded-full border px-5 text-[14px] font-semibold transition-all active:scale-95 ${
+                className={`flex h-11 items-center gap-2 rounded-full border px-5 text-[14px] font-semibold transition-all active:scale-95 touch-target ${
                   followed
                     ? 'bg-white text-black border-white hover:bg-white/90'
                     : 'bg-white/[0.08] hover:bg-white/[0.14] border-white/[0.1] text-white'
@@ -545,8 +550,9 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
               <button
                 type="button"
                 onClick={handleShare}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-white transition-all active:scale-95"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.1] text-white transition-all active:scale-95 touch-target"
                 title="Share"
+                aria-label="Share artist"
               >
                 <Share2 className="h-4 w-4" />
               </button>
@@ -560,21 +566,13 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
       {/* ======================================================= */}
       {topSongs.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between px-1">
-            <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
-              <Music2 className="h-5 w-5 text-purple-400" /> Popular Songs
-            </h2>
-            {topSongs.length > 5 && (
-              <button
-                type="button"
-                onClick={() => setShowAllSongs(!showAllSongs)}
-                className="inline-flex items-center gap-1 text-xs font-bold text-white/60 hover:text-white transition-colors"
-              >
-                {showAllSongs ? 'Show Less' : `See All (${topSongs.length})`}
-                {showAllSongs ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-              </button>
-            )}
-          </div>
+          <SectionHeader
+            title="Popular Songs"
+            icon={<Music2 className="h-5 w-5 text-purple-400" />}
+            actionLabel={topSongs.length > 5 ? (showAllSongs ? 'Show Less' : `See All (${topSongs.length})`) : undefined}
+            onAction={topSongs.length > 5 ? () => setShowAllSongs(!showAllSongs) : undefined}
+            actionIcon={showAllSongs ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          />
 
           <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-2 divide-y divide-white/[0.04]">
             {visibleSongs.map((track, idx) => (
@@ -599,11 +597,10 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
       {/* ======================================================= */}
       {albums.length > 0 && (
         <div className="space-y-3.5">
-          <div className="flex items-center justify-between px-1">
-            <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
-              <Disc3 className="h-5 w-5 text-cyan-400" /> Discography & Albums
-            </h2>
-          </div>
+          <SectionHeader
+            title="Discography & Albums"
+            icon={<Disc3 className="h-5 w-5 text-cyan-400" />}
+          />
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
             {albums.map((al) => (
@@ -616,11 +613,12 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                 className="group cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
               >
                 <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
-                  <img
+                  <ArtworkImage
                     src={al.thumbnails?.[0]?.url || ''}
                     alt={al.name}
                     loading="lazy"
                     className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    referrerPolicy="no-referrer"
                   />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                     <span className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
@@ -645,11 +643,10 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
       {/* ======================================================= */}
       {singles.length > 0 && (
         <div className="space-y-3.5">
-          <div className="flex items-center justify-between px-1">
-            <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-amber-400" /> Singles & EPs
-            </h2>
-          </div>
+          <SectionHeader
+            title="Singles & EPs"
+            icon={<Sparkles className="h-5 w-5 text-amber-400" />}
+          />
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
             {singles.map((sg) => (
@@ -662,11 +659,12 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                 className="group cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
               >
                 <div className="relative aspect-square w-full rounded-[16px] overflow-hidden bg-[#141416] ring-1 ring-white/10">
-                  <img
+                  <ArtworkImage
                     src={sg.thumbnails?.[0]?.url || ''}
                     alt={sg.name}
                     loading="lazy"
                     className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    referrerPolicy="no-referrer"
                   />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                     <span className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
@@ -704,11 +702,10 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
       ) : (
         similarArtists.length > 0 && (
         <div className="space-y-3.5">
-          <div className="flex items-center justify-between px-1">
-            <h2 className="text-[19px] sm:text-[22px] font-extrabold text-white tracking-tight flex items-center gap-2">
-              <Users className="h-5 w-5 text-purple-400" /> Fans Also Like
-            </h2>
-          </div>
+          <SectionHeader
+            title="Fans Also Like"
+            icon={<Users className="h-5 w-5 text-purple-400" />}
+          />
 
           <div className="flex gap-4 overflow-x-auto scrollbar-none pb-2 -mx-1 px-1">
             {similarArtists.map((sim) => (
@@ -720,11 +717,12 @@ export const ArtistPage: React.FC<ArtistPageProps> = ({
                 className="group flex flex-col items-center text-center cursor-pointer min-w-[125px] w-[125px] shrink-0 p-2.5 rounded-2xl hover:bg-white/[0.04] transition-all"
               >
                 <div className="relative aspect-square w-full rounded-full overflow-hidden bg-[#18181b] ring-2 ring-white/10 group-hover:ring-white/30 shadow-md transition-all">
-                  <img
+                  <ArtworkImage
                     src={sim.thumbnails?.[0]?.url || ''}
                     alt={sim.name}
                     loading="lazy"
                     className="h-full w-full object-cover group-hover:scale-110 transition-transform duration-500"
+                    referrerPolicy="no-referrer"
                   />
                   <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                     <Play className="h-5 w-5 fill-white text-white" />

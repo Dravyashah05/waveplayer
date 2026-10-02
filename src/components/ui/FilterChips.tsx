@@ -13,6 +13,7 @@ interface FilterChipsProps {
   activeId: string;
   onChange: (id: string) => void;
   className?: string;
+  layoutIdPrefix?: string;
 }
 
 export const FilterChips: React.FC<FilterChipsProps> = ({
@@ -20,6 +21,7 @@ export const FilterChips: React.FC<FilterChipsProps> = ({
   activeId,
   onChange,
   className = '',
+  layoutIdPrefix = 'filter-chip',
 }) => {
   return (
     <div
@@ -45,7 +47,7 @@ export const FilterChips: React.FC<FilterChipsProps> = ({
           >
             {isActive && (
               <motion.div
-                layoutId="filter-chip-active"
+                layoutId={`${layoutIdPrefix}-active`}
                 className="absolute inset-0 rounded-full bg-white"
                 transition={{ type: 'spring', stiffness: 450, damping: 35 }}
               />

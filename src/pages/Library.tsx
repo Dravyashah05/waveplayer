@@ -50,6 +50,8 @@ import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
 import { PlaylistModal, PlaylistModalValue } from '../components/PlaylistModal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { BulkActionBar } from '../components/BulkActionBar';
+import { FilterChips } from '../components/ui/FilterChips';
+import { ArtworkImage } from '../components/ArtworkImage';
 import {
   LocalPlaylist,
   LibrarySortOption,
@@ -691,6 +693,26 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
     { id: 'downloads', label: 'Downloads', icon: Download, count: offlineTracks.length },
   ];
 
+  const libraryTabItems = useMemo(() => tabs.map((t) => ({
+    id: t.id,
+    label: t.label,
+    icon: <t.icon className="h-3.5 w-3.5" />,
+    count: t.count,
+  })), [tabs]);
+
+  const librarySourceItems = useMemo(() => [
+    { id: 'all', label: 'All', icon: <LayoutGrid className="h-3.5 w-3.5" /> },
+    { id: 'wave', label: 'Wave', icon: <Music className="h-3.5 w-3.5" /> },
+    { id: 'ytmusic', label: 'YouTube Music', icon: <Youtube className="h-3.5 w-3.5" /> },
+  ], []);
+
+  const songFilterItems = useMemo(() => [
+    { id: 'all', label: 'All songs' },
+    { id: 'liked', label: 'Liked' },
+    { id: 'recent', label: 'Recently Played' },
+    { id: 'added', label: 'Recently Added' },
+  ], []);
+
   return (
     <div className="space-y-6 pb-20">
       {/* ——— TOP HEADER ——— */}
@@ -721,7 +743,8 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
               {searchQuery && (
                 <button
                   onClick={() => setSearchQuery('')}
-                  className="absolute right-2.5 text-white/40 hover:text-white transition-colors"
+                  className="absolute right-2.5 text-white/40 hover:text-white transition-colors touch-target"
+                  aria-label="Clear search"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -755,69 +778,24 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
         </div>
 
         {/* Primary Tabs Carousel */}
-        <div className="flex gap-1.5 overflow-x-auto scrollbar-none pb-1 -mx-1 px-1">
-          {tabs.map((t) => {
-            const isActive = tab === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => {
-                  setTab(t.id);
-                  setSelectable(false);
-                  setSelectedIds(new Set());
-                }}
-                className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold border whitespace-nowrap transition-all ${
-                  isActive
-                    ? 'bg-white text-black border-white shadow-[0_2px_12px_rgba(255,255,255,0.18)] scale-[1.02]'
-                    : 'bg-white/[0.04] text-[#a1a1aa] border-white/[0.08] hover:text-white hover:bg-white/[0.08]'
-                }`}
-              >
-                <t.icon className="h-3.5 w-3.5" />
-                <span>{t.label}</span>
-                {typeof t.count === 'number' && t.count > 0 && (
-                  <span
-                    className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
-                      isActive ? 'bg-black/15 text-black font-bold' : 'bg-white/10 text-white/60'
-                    }`}
-                  >
-                    {t.count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
+        <FilterChips
+          items={libraryTabItems}
+          activeId={tab}
+          onChange={(id) => {
+            setTab(id as TabId);
+            setSelectable(false);
+            setSelectedIds(new Set());
+          }}
+          layoutIdPrefix="library-tabs"
+        />
 
         {/* Library Source Selector: All / Wave / YouTube Music */}
-        <div className="flex items-center gap-1.5" role="tablist" aria-label="Library source">
-          {(
-            [
-              { id: 'all', label: 'All', icon: LayoutGrid },
-              { id: 'wave', label: 'Wave', icon: Music },
-              { id: 'ytmusic', label: 'YouTube Music', icon: Youtube },
-            ] as const
-          ).map((s) => {
-            const isActive = source === s.id;
-            return (
-              <button
-                key={s.id}
-                role="tab"
-                aria-selected={isActive}
-                onClick={() => handleSourceChange(s.id)}
-                className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold border whitespace-nowrap transition-all ${
-                  isActive
-                    ? s.id === 'ytmusic'
-                      ? 'bg-red-500 text-white border-red-500 shadow-[0_2px_12px_rgba(239,68,68,0.35)]'
-                      : 'bg-white text-black border-white shadow-[0_2px_12px_rgba(255,255,255,0.18)]'
-                    : 'bg-white/[0.04] text-[#a1a1aa] border-white/[0.08] hover:text-white hover:bg-white/[0.08]'
-                }`}
-              >
-                <s.icon className="h-3.5 w-3.5" />
-                <span>{s.label}</span>
-              </button>
-            );
-          })}
-        </div>
+        <FilterChips
+          items={librarySourceItems}
+          activeId={source}
+          onChange={(id) => handleSourceChange(id as LibrarySource)}
+          layoutIdPrefix="library-source"
+        />
       </div>
 
       {/* ——— TAB CONTENT ——— */}
@@ -841,28 +819,12 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
               {/* Controls Bar: Sub-filters + Play All + Shuffle + Sort + Select */}
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.02] p-3 backdrop-blur-md">
                 {/* Filter Chips */}
-                <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none">
-                  {(
-                    [
-                      { id: 'all', label: 'All songs' },
-                      { id: 'liked', label: 'Liked' },
-                      { id: 'recent', label: 'Recently Played' },
-                      { id: 'added', label: 'Recently Added' },
-                    ] as const
-                  ).map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => setSongFilter(f.id)}
-                      className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-all ${
-                        songFilter === f.id
-                          ? 'bg-white text-black shadow-sm'
-                          : 'bg-white/[0.05] text-white/60 hover:text-white hover:bg-white/10'
-                      }`}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
+                <FilterChips
+                  items={songFilterItems}
+                  activeId={songFilter}
+                  onChange={(id) => setSongFilter(id as SongFilter)}
+                  layoutIdPrefix="library-song-filter"
+                />
 
                 {/* Action Buttons & Sort Dropdown */}
                 <div className="flex items-center gap-2 ml-auto flex-wrap">
@@ -1006,15 +968,12 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                       className="group cursor-pointer rounded-[20px] border border-white/10 bg-white/[0.03] p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-[0_8px_24px_rgba(0,0,0,0.3)] backdrop-blur-md"
                     >
                       <div className="relative aspect-square w-full overflow-hidden rounded-[14px] bg-[#1a1a1c] ring-1 ring-white/10 shadow-sm">
-                        <img
+                        <ArtworkImage
                           src={album.thumbnail}
                           alt={album.name}
                           loading="lazy"
                           className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                          onError={(e) => {
-                            const img = e.currentTarget as HTMLImageElement;
-                            if (img.src.includes('maxresdefault')) img.src = img.src.replace('maxresdefault', 'hqdefault');
-                          }}
+                          referrerPolicy="no-referrer"
                         />
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <button
@@ -1057,10 +1016,11 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                       }}
                       className="flex items-center gap-3.5 px-4 py-3 hover:bg-white/[0.05] transition-colors cursor-pointer group"
                     >
-                      <img
+                      <ArtworkImage
                         src={album.thumbnail}
                         alt=""
                         className="h-12 w-12 rounded-xl object-cover ring-1 ring-white/10 shrink-0"
+                        referrerPolicy="no-referrer"
                       />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[14px] font-bold text-white group-hover:text-white">
@@ -1115,15 +1075,12 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                       className="group cursor-pointer rounded-[24px] border border-white/10 bg-white/[0.03] p-4 hover:bg-white/[0.07] hover:border-white/20 transition-all flex flex-col items-center text-center shadow-[0_8px_24px_rgba(0,0,0,0.3)] backdrop-blur-md"
                     >
                       <div className="relative aspect-square w-full max-w-[140px] overflow-hidden rounded-full bg-[#1a1a1c] ring-2 ring-white/15 shadow-md">
-                        <img
+                        <ArtworkImage
                           src={artist.thumbnail}
                           alt={artist.name}
                           loading="lazy"
                           className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                          onError={(e) => {
-                            const img = e.currentTarget as HTMLImageElement;
-                            if (img.src.includes('maxresdefault')) img.src = img.src.replace('maxresdefault', 'hqdefault');
-                          }}
+                          referrerPolicy="no-referrer"
                         />
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <button
@@ -1160,10 +1117,11 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                       }}
                       className="flex items-center gap-3.5 px-4 py-3 hover:bg-white/[0.05] transition-colors cursor-pointer group"
                     >
-                      <img
+                      <ArtworkImage
                         src={artist.thumbnail}
                         alt=""
                         className="h-12 w-12 rounded-full object-cover ring-1 ring-white/15 shrink-0"
+                        referrerPolicy="no-referrer"
                       />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[14px] font-bold text-white group-hover:text-white">
@@ -1287,11 +1245,12 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                       >
                         <div className="h-16 w-16 rounded-[14px] bg-gradient-to-br from-white/15 to-white/5 border border-white/10 flex items-center justify-center text-white font-black text-lg shrink-0 group-hover:scale-105 transition-transform overflow-hidden">
                           {pl.thumbnail || pl.songs?.[0]?.thumbnail ? (
-                            <img
+                            <ArtworkImage
                               src={pl.thumbnail || pl.songs?.[0]?.thumbnail || ''}
                               alt=""
                               loading="lazy"
                               className="h-full w-full object-cover"
+                              referrerPolicy="no-referrer"
                             />
                           ) : (
                             pl.title.slice(0, 2).toUpperCase()
@@ -1388,10 +1347,11 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                         className="rounded-2xl border border-white/5 bg-black/30 p-3 transition-all"
                       >
                         <div className="flex items-center gap-3">
-                          <img
+                          <ArtworkImage
                             src={playlist.thumbnail || `https://i.ytimg.com/vi/${playlist.id}/default.jpg`}
                             alt=""
                             className="h-12 w-12 rounded-xl object-cover ring-1 ring-white/10 shrink-0"
+                            referrerPolicy="no-referrer"
                           />
                           <button
                             onClick={async () => {
@@ -1483,10 +1443,11 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                                   }}
                                   className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-white/5 rounded-lg transition-colors"
                                 >
-                                  <img
+                                  <ArtworkImage
                                     src={item.thumbnail || `https://i.ytimg.com/vi/${item.videoId || ''}/default.jpg`}
                                     alt=""
                                     className="h-8 w-8 rounded-lg object-cover bg-white/5 shrink-0"
+                                    referrerPolicy="no-referrer"
                                   />
                                   <div className="min-w-0 flex-1">
                                     <span className="block truncate text-xs font-semibold text-white">

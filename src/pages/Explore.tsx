@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { Track, Album, Playlist, SearchArtist } from '../types';
 import { getSaavnBrowseModules, searchSaavnArtists } from '../services/saavnApi';
+import { ArtworkImage } from '../components/ArtworkImage';
 
 const MOODS = [
   { id: 'chill', label: 'Chill', sub: 'Lo-fi & mellow', query: 'chill lofi', grad: 'from-[#5ac8fa] via-[#007aff] to-[#0a84ff]', icon: Waves, accent: '#5ac8fa' },
@@ -114,7 +115,7 @@ export const ExplorePage: React.FC<{
         >
           <div className="absolute inset-0 pointer-events-none overflow-hidden">
             {heroTrack?.thumbnail ? (
-              <img src={heroTrack.thumbnail} alt="" className="h-full w-full object-cover scale-110 blur-[32px] opacity-30" referrerPolicy="no-referrer" />
+              <ArtworkImage src={heroTrack.thumbnail} alt="" className="h-full w-full object-cover scale-110 blur-[32px] opacity-30" referrerPolicy="no-referrer" />
             ) : (
               <div className="h-full w-full bg-gradient-to-br from-[#7a5cff] via-[#ff2d55] to-[#007aff] opacity-40" />
             )}
@@ -260,7 +261,7 @@ export const ExplorePage: React.FC<{
             {trending.map(t => (
               <div key={t.id} onClick={() => onPlay?.(t, trending)} className="snap-start group cursor-pointer min-w-[140px] w-[140px] sm:min-w-[175px] sm:w-[175px] shrink-0">
                 <div className="relative aspect-square overflow-hidden rounded-[18px] bg-[#18181b] ring-1 ring-white/[0.08] shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
-                  <img src={t.thumbnail} alt={t.title} loading="lazy" className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500" referrerPolicy="no-referrer" />
+                  <ArtworkImage src={t.thumbnail} alt={t.title} loading="lazy" className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500" referrerPolicy="no-referrer" />
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
                     <span className="h-10 w-10 rounded-full bg-white text-black grid place-items-center shadow-lg opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all"><Play className="h-4 w-4 fill-current ml-0.5" /></span>
                   </div>
@@ -323,7 +324,7 @@ export const ExplorePage: React.FC<{
                 {topPlaylists.slice(0, 3).map(pl => (
                   <button key={pl.playlistId} onClick={() => onPlayPlaylist ? onPlayPlaylist(pl.playlistId) : onNavigate?.('playlist', pl.playlistId)} className="group text-left">
                     <div className="aspect-square overflow-hidden rounded-[14px] bg-[#18181b] ring-1 ring-white/10 group-hover:ring-white/20 transition-all">
-                      <img src={pl.thumbnails?.[0]?.url || ''} alt={pl.name} loading="lazy" className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                      <ArtworkImage src={pl.thumbnails?.[0]?.url || ''} alt={pl.name} loading="lazy" className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500" />
                     </div>
                     <p className="mt-2 truncate text-xs font-bold text-white group-hover:text-[#ff9500]">{pl.name}</p>
                     <p className="truncate text-[11px] text-[#86868b]">{pl.author}</p>
@@ -341,7 +342,7 @@ export const ExplorePage: React.FC<{
               <div className="mt-4 space-y-2.5">
                 {charts.map(pl => (
                   <button key={pl.playlistId} onClick={() => onPlayPlaylist ? onPlayPlaylist(pl.playlistId) : onNavigate?.('playlist', pl.playlistId)} className="group flex items-center gap-3 w-full text-left rounded-xl hover:bg-white/[0.04] p-2 -mx-2 transition-colors">
-                    <img src={pl.thumbnails?.[0]?.url || ''} alt={pl.name} className="h-12 w-12 rounded-lg object-cover ring-1 ring-white/10" />
+                    <ArtworkImage src={pl.thumbnails?.[0]?.url || ''} alt={pl.name} className="h-12 w-12 rounded-lg object-cover ring-1 ring-white/10" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13px] font-bold text-white group-hover:text-white">{pl.name}</p>
                       <p className="truncate text-xs text-[#86868b]">{pl.videoCount || '50'} songs • Charts</p>
@@ -366,7 +367,7 @@ export const ExplorePage: React.FC<{
             {newAlbums.map(al => (
               <button key={al.albumId} onClick={() => onNavigate?.('album', al.albumId)} className="group text-left">
                 <div className="aspect-square overflow-hidden rounded-[14px] bg-[#18181b] ring-1 ring-white/10 group-hover:ring-white/20 transition-all">
-                  <img src={al.thumbnails?.[0]?.url || ''} alt={al.name} loading="lazy" className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                  <ArtworkImage src={al.thumbnails?.[0]?.url || ''} alt={al.name} loading="lazy" className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500" />
                 </div>
                 <p className="mt-2 truncate text-xs font-bold text-white group-hover:text-[#00c7be]">{al.name}</p>
                 <p className="truncate text-[11px] text-[#86868b]">{al.artist.name}</p>
@@ -387,7 +388,7 @@ export const ExplorePage: React.FC<{
             {topArtists.map(a => (
               <button key={a.artistId} onClick={() => onNavigate?.('artist', a.artistId)} className="group flex flex-col items-center gap-2">
                 <div className="relative aspect-square w-full rounded-full overflow-hidden ring-1 ring-white/10 group-hover:ring-white/30 transition-all bg-[#18181b]">
-                  <img src={a.thumbnails?.[0]?.url || ''} alt={a.name} loading="lazy" className="h-full w-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                  <ArtworkImage src={a.thumbnails?.[0]?.url || ''} alt={a.name} loading="lazy" className="h-full w-full object-cover group-hover:scale-110 transition-transform duration-500" />
                 </div>
                 <p className="w-full truncate text-center text-xs font-bold text-white group-hover:text-[#af52de] leading-tight">{a.name}</p>
               </button>

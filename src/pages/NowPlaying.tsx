@@ -164,24 +164,24 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
     >
       <div className="pointer-events-none absolute inset-0" aria-hidden="true" style={{ background: `radial-gradient(60% 45% at 20% 0%, ${palette.surface}, transparent)` }} />
 
-      <div className="relative mb-4 flex items-center justify-between">
+      <div className="relative mb-4 sm:mb-6 flex items-center justify-between">
         <button
           type="button"
           onClick={() => (onBack ? onBack() : window.history.back())}
           aria-label="Go back"
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-1.5 text-xs font-semibold text-white/90 hover:bg-white/[0.14]"
+          className="touch-target inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs font-semibold text-white/90 hover:bg-white/[0.14] active:scale-95 transition-all shadow-sm"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> Back
+          <ArrowLeft className="h-4 w-4" /> Back
         </button>
-        <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-white/40">Now playing</p>
+        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/40">Now Playing</p>
         <button
           type="button"
           onClick={onOpenQueue}
           aria-label="Open queue"
           title="Open queue"
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-1.5 text-xs font-semibold text-white/90 hover:bg-white/[0.14]"
+          className="touch-target inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs font-semibold text-white/90 hover:bg-white/[0.14] active:scale-95 transition-all shadow-sm"
         >
-          <ListMusic className="h-3.5 w-3.5" /> Queue
+          <ListMusic className="h-4 w-4" /> Queue
         </button>
       </div>
 
@@ -240,14 +240,14 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
           </div>
 
           {/* Transport */}
-          <div className="mt-2 flex items-center justify-center gap-2" role="group" aria-label="Playback controls">
+          <div className="mt-3 flex items-center justify-center gap-3 sm:gap-4" role="group" aria-label="Playback controls">
             <button
               type="button"
               onClick={() => playerStore.toggleShuffle()}
               aria-label={shuffle ? 'Shuffle on' : 'Shuffle off'}
               aria-pressed={shuffle}
               title="Shuffle"
-              className={`flex h-10 w-10 items-center justify-center rounded-full transition-colors ${shuffle ? 'bg-white text-black' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
+              className={`touch-target flex h-10 w-10 items-center justify-center rounded-full transition-all active:scale-95 ${shuffle ? 'bg-white text-black shadow-md' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
             >
               <Shuffle className="h-4 w-4" />
             </button>
@@ -256,7 +256,7 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
               onClick={() => playerEngine.prev()}
               aria-label="Previous track"
               title="Previous (P)"
-              className="flex h-12 w-12 items-center justify-center rounded-full text-white hover:bg-white/10"
+              className="touch-target flex h-12 w-12 items-center justify-center rounded-full text-white hover:bg-white/10 active:scale-90 transition-all"
             >
               <SkipBack className="h-5 w-5 fill-current" />
             </button>
@@ -265,15 +265,15 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
               onClick={() => playerEngine.toggle()}
               aria-label={eng.isPlaying ? 'Pause' : 'Play'}
               title="Play/Pause (Space)"
-              className="flex h-14 w-14 items-center justify-center rounded-full text-black shadow-lg"
+              className="touch-target-lg flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full text-black shadow-[0_8px_24px_rgba(0,0,0,0.5)] active:scale-95 hover:scale-105 transition-all"
               style={{ background: palette.primary }}
             >
               {eng.isBuffering ? (
-                <Loader2 className="h-6 w-6 animate-spin" />
+                <Loader2 className="h-6 w-6 sm:h-7 sm:w-7 animate-spin" />
               ) : eng.isPlaying ? (
-                <Pause className="h-6 w-6 fill-current" />
+                <Pause className="h-6 w-6 sm:h-7 sm:w-7 fill-current" />
               ) : (
-                <Play className="ml-0.5 h-6 w-6 fill-current" />
+                <Play className="ml-0.5 h-6 w-6 sm:h-7 sm:w-7 fill-current" />
               )}
             </button>
             <button
@@ -281,7 +281,7 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
               onClick={() => playerEngine.next()}
               aria-label="Next track"
               title="Next (N)"
-              className="flex h-12 w-12 items-center justify-center rounded-full text-white hover:bg-white/10"
+              className="touch-target flex h-12 w-12 items-center justify-center rounded-full text-white hover:bg-white/10 active:scale-90 transition-all"
             >
               <SkipForward className="h-5 w-5 fill-current" />
             </button>
@@ -291,23 +291,23 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
               aria-label={repeatLabel}
               aria-pressed={repeat !== 'off'}
               title={repeatLabel}
-              className={`flex h-10 w-10 items-center justify-center rounded-full transition-colors ${repeat !== 'off' ? 'bg-white text-black' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
+              className={`touch-target flex h-10 w-10 items-center justify-center rounded-full transition-all active:scale-95 ${repeat !== 'off' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
             >
               {repeat === 'one' ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
             </button>
           </div>
-          <p className="mt-1 text-center text-[11px] font-medium text-white/35" role="status">
+          <p className="mt-2 text-center text-[11px] font-medium text-white/35" role="status">
             {shuffle ? 'Shuffle on • ' : ''}{repeatLabel}
             {eng.playbackRate !== 1 ? ` • ${eng.playbackRate}x` : ''}
           </p>
 
           {/* Volume + speed (desktop inline; mobile keeps volume in overflow) */}
-          <div className="mt-3 hidden items-center gap-2 md:flex">
+          <div className="mt-4 hidden items-center gap-2 md:flex">
             <button
               type="button"
               onClick={() => playerEngine.toggleMute()}
               aria-label={eng.muted ? 'Unmute' : 'Mute'}
-              className="flex h-9 w-9 items-center justify-center rounded-full text-white/70 hover:bg-white/10 hover:text-white"
+              className="touch-target flex h-9 w-9 items-center justify-center rounded-full text-white/70 hover:bg-white/10 hover:text-white transition-all active:scale-95"
             >
               {eng.muted || eng.volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
             </button>
@@ -327,12 +327,12 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
                 onClick={() => setSpeedOpen((v) => !v)}
                 aria-label={`Playback speed ${eng.playbackRate}x`}
                 aria-expanded={speedOpen}
-                className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-bold text-white/80 hover:bg-white/15"
+                className="touch-target rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-1.5 text-xs font-bold text-white/80 hover:bg-white/15 transition-all active:scale-95"
               >
                 {eng.playbackRate}x
               </button>
               {speedOpen && (
-                <div role="menu" aria-label="Playback speed" className="absolute bottom-10 right-0 z-30 w-32 overflow-hidden rounded-2xl border border-white/10 bg-[#141416] p-1.5 shadow-xl">
+                <div role="menu" aria-label="Playback speed" className="absolute bottom-10 right-0 z-30 w-32 overflow-hidden rounded-2xl border border-white/10 bg-[#141416] p-1.5 shadow-xl backdrop-blur-xl">
                   {SPEEDS.map((s) => (
                     <button
                       key={s}
@@ -343,7 +343,7 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
                         playerEngine.setPlaybackRate(s);
                         setSpeedOpen(false);
                       }}
-                      className={`block w-full rounded-xl px-3 py-2 text-left text-xs font-semibold ${eng.playbackRate === s ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
+                      className={`block w-full rounded-xl px-3 py-2 text-left text-xs font-semibold transition-colors ${eng.playbackRate === s ? 'bg-white text-black font-bold' : 'text-white/80 hover:bg-white/10'}`}
                     >
                       {s}x{s === 1 ? ' (normal)' : ''}
                     </button>
@@ -362,21 +362,21 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
               onClick={toggleFav}
               aria-label={isFav ? 'Unlike' : 'Like'}
               aria-pressed={isFav}
-              className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold transition-colors ${isFav ? 'bg-white text-black' : 'border border-white/10 bg-white/[0.06] text-white/80 hover:bg-white/15'}`}
+              className={`touch-target inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold transition-all active:scale-95 ${isFav ? 'bg-white text-black shadow-md' : 'border border-white/10 bg-white/[0.06] text-white/80 hover:bg-white/15'}`}
             >
-              <Heart className={`h-3.5 w-3.5 ${isFav ? 'fill-current' : ''}`} /> {isFav ? 'Liked' : 'Like'}
+              <Heart className={`h-3.5 w-3.5 ${isFav ? 'fill-current text-red-500' : ''}`} /> {isFav ? 'Liked' : 'Like'}
             </button>
             <button
               type="button"
               onClick={() => setPickerOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs font-semibold text-white/80 hover:bg-white/15"
+              className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs font-semibold text-white/80 hover:bg-white/15 transition-all active:scale-95"
             >
               <FolderPlus className="h-3.5 w-3.5" /> Add to Playlist
             </button>
             <button
               type="button"
               onClick={handleRadio}
-              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs font-semibold text-white/80 hover:bg-white/15"
+              className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs font-semibold text-white/80 hover:bg-white/15 transition-all active:scale-95"
             >
               <Radio className="h-3.5 w-3.5" /> Start Radio
             </button>
@@ -384,7 +384,7 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
               type="button"
               onClick={() => setShowLyrics((v) => !v)}
               aria-expanded={showLyrics}
-              className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition-colors ${showLyrics ? 'bg-white text-black' : 'border border-white/10 bg-white/[0.06] text-white/80 hover:bg-white/15'}`}
+              className={`touch-target inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition-all active:scale-95 ${showLyrics ? 'bg-white text-black shadow-md' : 'border border-white/10 bg-white/[0.06] text-white/80 hover:bg-white/15'}`}
             >
               <MicVocal className="h-3.5 w-3.5" /> Lyrics
             </button>
@@ -394,7 +394,7 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
                 onClick={() => setMoreOpen((v) => !v)}
                 aria-label="More track actions"
                 aria-expanded={moreOpen}
-                className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-white/80 hover:bg-white/15"
+                className="touch-target flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-white/80 hover:bg-white/15 transition-all active:scale-95"
               >
                 <MoreVertical className="h-4 w-4" />
               </button>

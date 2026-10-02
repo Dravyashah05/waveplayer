@@ -373,12 +373,12 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
 
   if (!track) {
     return (
-      <div className="fixed bottom-[calc(112px+env(safe-area-inset-bottom))] sm:bottom-[calc(108px+env(safe-area-inset-bottom))] lg:bottom-6 left-1/2 -translate-x-1/2 w-[calc(100%-12px)] sm:w-[calc(100%-24px)] max-w-[560px] lg:max-w-[640px] z-30 liquid-dock rounded-[22px] px-4 sm:px-5 py-3 sm:py-3.5 border border-white/[0.06] shadow-[0_12px_36px_rgba(0,0,0,0.6)]">
-        <div className="flex items-center justify-center gap-2.5 text-xs sm:text-sm text-[#9a9aa0]">
+      <div className="fixed bottom-[calc(76px+env(safe-area-inset-bottom))] lg:bottom-6 left-1/2 -translate-x-1/2 w-[calc(100%-14px)] sm:w-[calc(100%-28px)] max-w-[560px] lg:max-w-[640px] z-30 rounded-[24px] px-4 py-3 border border-white/[0.10] bg-[#0c0c0e]/95 backdrop-blur-xl shadow-[0_16px_48px_rgba(0,0,0,0.7)] select-none">
+        <div className="flex items-center justify-center gap-2.5 text-xs sm:text-sm text-white/50">
           <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-white/70 shrink-0">
             <Music2 className="h-3.5 w-3.5" />
           </span>
-          <p className="truncate">Select a track to start playing <span className="text-white/30">— Wave Music</span></p>
+          <p className="truncate">Select a track to start playing <span className="text-white/30">— Wave</span></p>
         </div>
       </div>
     );
@@ -398,6 +398,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
         onNext={handleNext}
         onPrev={handlePrev}
         onToggleFav={toggleFav}
+        onOpenQueue={onOpenQueue}
       />
 
       {/* Hidden YouTube surface mount */}

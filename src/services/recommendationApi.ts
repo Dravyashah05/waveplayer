@@ -41,14 +41,39 @@ function toTrack(raw: any): Track | null {
   };
 }
 
+const recCache = new Map<string, { data: any; expires: number }>();
+const inFlight = new Map<string, Promise<any>>();
+
 async function getJson(path: string): Promise<any | null> {
-  try {
-    const res = await fetch(path);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
+  const now = Date.now();
+  const cached = recCache.get(path);
+  if (cached && cached.expires > now) {
+    return cached.data;
   }
+  const pending = inFlight.get(path);
+  if (pending) return pending;
+
+  const fetchPromise = (async () => {
+    try {
+      const res = await fetch(path);
+      if (!res.ok) {
+        if (res.status === 429 && cached) {
+          return cached.data;
+        }
+        return null;
+      }
+      const data = await res.json();
+      recCache.set(path, { data, expires: Date.now() + 45000 });
+      return data;
+    } catch {
+      return cached ? cached.data : null;
+    } finally {
+      inFlight.delete(path);
+    }
+  })();
+
+  inFlight.set(path, fetchPromise);
+  return fetchPromise;
 }
 
 function tracksOf(data: any): Track[] {

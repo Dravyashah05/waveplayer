@@ -158,7 +158,7 @@ function playlistItem(i: any) {
 }
 function registerYoutubeRoutes(app: Express) {
   app.use(async (req, res, next) => {
-    if (!req.path.startsWith('/api/auth/') && !req.path.startsWith('/api/youtube/')) return next();
+    if (!req.path.startsWith('/api/auth/') && !req.path.startsWith('/api/youtube/') && !req.path.startsWith('/api/ytmusic-py/')) return next();
     const raw = req.headers.cookie?.split(';').map(v => v.trim()).find(v => v.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
     let id = raw && /^[a-f0-9]{64}$/.test(raw) ? raw : randomBytes(32).toString('hex');
     let session: Session = {};
@@ -257,3 +257,17 @@ function registerYoutubeRoutes(app: Express) {
 }
 
 export { registerYoutubeRoutes, playlist as normalizePlaylist, playlistItem as normalizePlaylistItem };
+
+/**
+ * Identity key for downstream per-user services (e.g. the ytmusic-python
+ * gateway). Prefers the Google user id; falls back to the per-browser
+ * session id so anonymous visitors still get isolated (never shared) state.
+ * Returns null only when no session was attached to the request.
+ */
+export function getWaveUserKey(req: Request): string | null {
+  const record = requestSessions.get(req);
+  if (!record) return null;
+  const googleId = record.value.user?.id;
+  if (typeof googleId === 'string' && googleId) return `google:${googleId}`;
+  return `anon:${record.id}`;
+}

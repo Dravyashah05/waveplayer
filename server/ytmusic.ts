@@ -3,12 +3,16 @@ import express from 'express';
 import YTMusic from 'ytmusic-api';
 import { resolveYouTubeAudio, YOUTUBE_VIDEO_ID } from './youtubeStream.js';
 import { registerYoutubeRoutes } from './googleYouTube.js';
+import { registerYTMusicPyRoutes } from './services/ytmusicPython.js';
 import { registerRecommendationRoutes } from './recommendation/index.js';
 import { pathToFileURL } from 'node:url';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 registerYoutubeRoutes(app);
+// Python ytmusicapi gateway (separate service, user-isolated). Existing
+// /api/ytmusic/* routes below are untouched by this integration.
+registerYTMusicPyRoutes(app);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'wave-player' }));
 

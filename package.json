@@ -26,7 +26,9 @@
     "test:recommendations": "tsx --test src/services/recommendation/recommendation.test.ts",
     "test:stream": "tsx --test src/services/streamPlayback.test.ts server/youtubeStream.test.ts",
     "test:sources": "tsx --test src/services/audioSourceManager.test.ts",
-    "test:offline": "tsx --test src/services/offlineDownloads.test.ts"
+    "test:offline": "tsx --test src/services/offlineDownloads.test.ts",
+    "test:gateway": "tsx --test server/ytmusicPython.test.ts",
+    "test:py": "python -m unittest discover -s services/ytmusic-python -t services/ytmusic-python"
   },
   "dependencies": {
     "@types/crypto-js": "^4.2.2",

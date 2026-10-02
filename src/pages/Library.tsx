@@ -26,9 +26,12 @@ import {
   ExternalLink,
   ChevronRight,
   Radio,
+  Youtube,
+  RefreshCw,
 } from 'lucide-react';
 import { playerStore } from '../services/playerStore';
 import { createYTMusicPlaylist, checkYTMusicAuth } from '../services/ytmusicApi';
+import { YTMusicLibraryPanel } from '../components/YTMusicLibraryPanel';
 import {
   buildImportPreview,
   buildWavePlaylist,
@@ -61,7 +64,17 @@ import {
   extractLibraryArtists,
   sortTracks,
 } from '../services/libraryStore';
-import { getRecentlyPlayed, getListeningEvents, getPlayCount } from '../services/listeningStore';
+import { getRecentlyPlayed, getListeningEvents, getPlayCount, removeRecentEntry } from '../services/listeningStore';
+import {
+  attachRecency,
+  ensureYTMusicHistory,
+  getCachedYTMusicHistory,
+  groupHistoryByRecency,
+  mergeHistories,
+  refreshYTMusicHistory,
+  type UnifiedHistoryEntry,
+} from '../services/historyMerge';
+import { useGoogleAccount } from '../hooks/useGoogleAccount';
 import {
   formatBytes,
   getOfflineEntry,
@@ -72,6 +85,7 @@ import {
 export type TabId = 'songs' | 'albums' | 'artists' | 'playlists' | 'favs' | 'recent' | 'downloads';
 type SongFilter = 'all' | 'liked' | 'recent' | 'added';
 type View = 'grid' | 'list';
+export type LibrarySource = 'all' | 'wave' | 'ytmusic';
 type YouTubePlaylist = {
   id: string;
   title: string;
@@ -94,6 +108,20 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
   initialTab = 'songs',
 }) => {
   const [tab, setTab] = useState<TabId>(initialTab);
+  const [source, setSource] = useState<LibrarySource>(() => {
+    try {
+      const s = localStorage.getItem('wave:library_source');
+      return s === 'wave' || s === 'ytmusic' ? (s as LibrarySource) : 'all';
+    } catch {
+      return 'all';
+    }
+  });
+  const handleSourceChange = (s: LibrarySource) => {
+    setSource(s);
+    try {
+      localStorage.setItem('wave:library_source', s);
+    } catch {}
+  };
   const [view, setView] = useState<View>('list');
   const [searchQuery, setSearchQuery] = useState('');
   const [songFilter, setSongFilter] = useState<SongFilter>('all');
@@ -138,6 +166,73 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState('');
   const [importing, setImporting] = useState(false);
+
+  // Unified listening history (Wave + imported YT Music, deduped)
+  const { connected: googleConnected, user: googleUser } = useGoogleAccount();
+  const googleUserId = googleUser?.id || '';
+  const [ytHistoryTick, setYtHistoryTick] = useState(0);
+  const [ytRefreshing, setYtRefreshing] = useState(false);
+
+  // Fetch YT history when History opens / after login / on account switch.
+  // Async and non-blocking: playback and local history work regardless.
+  useEffect(() => {
+    if (tab !== 'recent') return;
+    let cancelled = false;
+    void ensureYTMusicHistory().then((r) => {
+      if (!cancelled && r.updated) setYtHistoryTick((n) => n + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, googleConnected, googleUserId]);
+
+  const unifiedHistorySections = useMemo(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    void ytHistoryTick;
+    // getCachedYTMusicHistory is user-scoped: another account never sees
+    // this account's imports, and logged-out mode yields [] (Wave only).
+    const merged = mergeHistories(history, getCachedYTMusicHistory());
+    const withTime = attachRecency(merged);
+    const sections = groupHistoryByRecency(withTime);
+    if (!searchQuery.trim()) return sections;
+    const q = searchQuery.toLowerCase().trim();
+    return sections.map((s) => ({
+      ...s,
+      entries: s.entries.filter(
+        (e) =>
+          e.track.title.toLowerCase().includes(q) ||
+          (e.track.author && e.track.author.toLowerCase().includes(q)) ||
+          (e.track.albumName && e.track.albumName.toLowerCase().includes(q)),
+      ),
+    }));
+  }, [history, ytHistoryTick, searchQuery, googleUserId]);
+
+  const historyFlat = useMemo(
+    () => unifiedHistorySections.flatMap((s) => s.entries.map((e) => e.track)),
+    [unifiedHistorySections],
+  );
+
+  const handleRefreshYTHistory = async () => {
+    if (ytRefreshing) return;
+    setYtRefreshing(true);
+    try {
+      const r = await refreshYTMusicHistory();
+      if (r.updated) setYtHistoryTick((n) => n + 1);
+      setToastMessage(r.updated ? 'YouTube Music history refreshed' : 'History is already up to date');
+    } finally {
+      setYtRefreshing(false);
+    }
+  };
+
+  const handleRemoveHistoryEntry = (entry: UnifiedHistoryEntry) => {
+    // YT Music imports are read-only (remove where supported → Wave only).
+    if (entry.primarySource === 'ytmusic' && entry.sources.length === 1) return;
+    playerStore.removeHistoryEntry(entry.track.id);
+    removeRecentEntry(entry.track.id);
+    setHistory([...playerStore.historyList()]);
+    setRecentlyPlayed([...getRecentlyPlayed(50)]);
+    setToastMessage('Removed from history');
+  };
 
   // Sync tab with props
   useEffect(() => {
@@ -672,17 +767,52 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
             );
           })}
         </div>
+
+        {/* Library Source Selector: All / Wave / YouTube Music */}
+        <div className="flex items-center gap-1.5" role="tablist" aria-label="Library source">
+          {(
+            [
+              { id: 'all', label: 'All', icon: LayoutGrid },
+              { id: 'wave', label: 'Wave', icon: Music },
+              { id: 'ytmusic', label: 'YouTube Music', icon: Youtube },
+            ] as const
+          ).map((s) => {
+            const isActive = source === s.id;
+            return (
+              <button
+                key={s.id}
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => handleSourceChange(s.id)}
+                className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold border whitespace-nowrap transition-all ${
+                  isActive
+                    ? s.id === 'ytmusic'
+                      ? 'bg-red-500 text-white border-red-500 shadow-[0_2px_12px_rgba(239,68,68,0.35)]'
+                      : 'bg-white text-black border-white shadow-[0_2px_12px_rgba(255,255,255,0.18)]'
+                    : 'bg-white/[0.04] text-[#a1a1aa] border-white/[0.08] hover:text-white hover:bg-white/[0.08]'
+                }`}
+              >
+                <s.icon className="h-3.5 w-3.5" />
+                <span>{s.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* ——— TAB CONTENT ——— */}
       <AnimatePresence mode="wait">
         <motion.div
-          key={tab}
+          key={`${source}-${tab}`}
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -8 }}
           transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
         >
+          {source === 'ytmusic' ? (
+            <YTMusicLibraryPanel onPlay={onPlay} onNavigate={onNavigate} searchQuery={searchQuery} />
+          ) : (
+            <>
           {/* ======================================================= */}
           {/* TAB 1: SONGS (UNIFIED LIBRARY TRACKS TABLE) */}
           {/* ======================================================= */}
@@ -1533,55 +1663,93 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                     <Clock className="h-4 w-4" />
                   </span>
                   <div>
-                    <h3 className="text-sm font-bold text-white">Recently Played</h3>
-                    <p className="text-xs text-white/50">{processedRecentSongs.length} recent tracks</p>
+                    <h3 className="text-sm font-bold text-white">History</h3>
+                    <p className="text-xs text-white/50">
+                      {historyFlat.length} tracks • Wave + YouTube Music
+                    </p>
                   </div>
                 </div>
-                {processedRecentSongs.length > 0 && (
-                  <div className="flex items-center gap-2">
+                {historyFlat.length > 0 && (
+                  <div className="flex items-center gap-2 flex-wrap">
                     <button
-                      onClick={() => handlePlayAll(processedRecentSongs)}
+                      onClick={() => handlePlayAll(historyFlat)}
                       className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-xs font-bold text-black hover:bg-white/90 active:scale-95 transition-all shadow-sm"
                     >
                       <Play className="h-3.5 w-3.5 fill-current" /> Play All
                     </button>
                     <button
-                      onClick={() => handleShuffle(processedRecentSongs)}
+                      onClick={() => handleShuffle(historyFlat)}
                       className="inline-flex items-center gap-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 px-3.5 py-1.5 text-xs font-semibold text-white active:scale-95 transition-all"
                     >
                       <Shuffle className="h-3.5 w-3.5" /> Shuffle
                     </button>
+                    {googleConnected && (
+                      <button
+                        onClick={() => void handleRefreshYTHistory()}
+                        disabled={ytRefreshing}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 px-3.5 py-1.5 text-xs font-semibold text-white active:scale-95 disabled:opacity-50 transition-all"
+                        title="Refresh YouTube Music history"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${ytRefreshing ? 'animate-spin' : ''}`} />
+                        {ytRefreshing ? 'Refreshing…' : 'Refresh'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
 
-              {processedRecentSongs.length === 0 ? (
+              {historyFlat.length === 0 ? (
                 <NoContent
                   variant="songs"
                   title="No listening history yet"
-                  description="Songs you listen to will appear here with relative timestamps and play counts."
+                  description="Songs you listen to will appear here grouped by recency, from Wave and YouTube Music."
                   actionLabel="Start Listening"
                   onAction={() => onNavigate?.('explore')}
                 />
               ) : (
-                <div className="rounded-[20px] border border-white/10 bg-[#101012]/80 backdrop-blur-xl p-1 sm:p-2 divide-y divide-white/[0.04]">
-                  {processedRecentSongs.map((t, idx) => {
-                    const isActive = currentTrack?.id === t.id;
-                    const timestamp = recentTimestampsMap[t.id];
-                    const relTime = timestamp ? formatRelativeTime(timestamp) : 'Recently';
-                    const playCount = playCountsMap[t.id] || 0;
+                <div className="space-y-5">
+                  {unifiedHistorySections.map((section) => {
+                    if (!section.entries.length) return null;
                     return (
-                      <SongRow
-                        key={`${t.id}-${idx}`}
-                        track={t}
-                        index={idx}
-                        isActive={isActive}
-                        isPlaying={isActive && isPlaying}
-                        onPlay={() => handlePlaySong(t, processedRecentSongs)}
-                        subtitleExtra={`${relTime}${playCount > 1 ? ` • ${playCount} plays` : ''}`}
-                        onOpenMenu={handleOpenContextMenu}
-                        onNavigate={onNavigate}
-                      />
+                      <div key={section.key} className="space-y-2">
+                        <div className="flex items-center gap-2 px-1">
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-white/50">
+                            {section.key === 'today'
+                              ? 'Recently Played'
+                              : section.label}
+                          </h4>
+                          <span className="text-[11px] font-mono text-white/30">
+                            {section.entries.length}
+                          </span>
+                        </div>
+                        <div className="rounded-[20px] border border-white/10 bg-[#101012]/80 backdrop-blur-xl p-1 sm:p-2 divide-y divide-white/[0.04]">
+                          {section.entries.map((entry, idx) => {
+                            const t = entry.track;
+                            const isActive = currentTrack?.id === t.id;
+                            const relTime = entry.lastPlayedAt
+                              ? formatRelativeTime(entry.lastPlayedAt)
+                              : recentTimestampsMap[t.id]
+                                ? formatRelativeTime(recentTimestampsMap[t.id])
+                                : 'Earlier';
+                            const playCount = playCountsMap[t.id] || 0;
+                            const removable = !(entry.primarySource === 'ytmusic' && entry.sources.length === 1);
+                            return (
+                              <SongRow
+                                key={`${section.key}-${t.id}-${idx}`}
+                                track={t}
+                                index={idx}
+                                isActive={isActive}
+                                isPlaying={isActive && isPlaying}
+                                onPlay={() => handlePlaySong(t, historyFlat)}
+                                subtitleExtra={`${relTime}${playCount > 1 ? ` • ${playCount} plays` : ''}${entry.primarySource === 'ytmusic' ? ' • YT Music' : ''}`}
+                                onOpenMenu={handleOpenContextMenu}
+                                onNavigate={onNavigate}
+                                onRemove={removable ? () => handleRemoveHistoryEntry(entry) : undefined}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
@@ -1624,6 +1792,19 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                   })}
                 </div>
               )}
+            </div>
+          )}
+            </>
+          )}
+          {source === 'all' && (
+            <div className="mt-8 space-y-3">
+              <div className="flex items-center gap-2 px-1">
+                <span className="h-2 w-2 rounded-full bg-red-500" />
+                <h2 className="text-xs font-bold uppercase tracking-wider text-white/50">
+                  YouTube Music
+                </h2>
+              </div>
+              <YTMusicLibraryPanel onPlay={onPlay} onNavigate={onNavigate} searchQuery={searchQuery} />
             </div>
           )}
         </motion.div>

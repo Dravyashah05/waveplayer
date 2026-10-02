@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Pause, Heart, MoreVertical, Clock3, Check } from 'lucide-react';
+import { Play, Pause, Heart, MoreVertical, Clock3, Check, X } from 'lucide-react';
 import { Track } from '../types';
 import { playerStore } from '../services/playerStore';
 import { formatTrackDuration } from '../services/libraryStore';
@@ -18,6 +18,8 @@ interface SongRowProps {
   onToggleSelect?: (selected: boolean) => void;
   onOpenMenu?: (track: Track, e: React.MouseEvent) => void;
   onNavigate?: (page: string, param?: string) => void;
+  /** Optional history removal (rendered as a small ×; History UI only). */
+  onRemove?: () => void;
 }
 
 export const SongRow: React.FC<SongRowProps> = ({
@@ -34,6 +36,7 @@ export const SongRow: React.FC<SongRowProps> = ({
   onToggleSelect,
   onOpenMenu,
   onNavigate,
+  onRemove,
 }) => {
   const [isFav, setIsFav] = useState(() => playerStore.isFav(track.id));
 
@@ -180,9 +183,9 @@ export const SongRow: React.FC<SongRowProps> = ({
               E
             </span>
           )}
-          {track.source === 'youtube' && (
+          {(track.source === 'youtube' || track.source === 'ytmusic') && (
             <span className="hidden sm:inline-flex shrink-0 rounded-full bg-red-500/15 border border-red-500/20 px-1.5 py-0.5 text-[9.5px] font-bold text-red-300 leading-none">
-              YT
+              {track.source === 'ytmusic' ? 'YT Music' : 'YT'}
             </span>
           )}
         </div>
@@ -229,8 +232,23 @@ export const SongRow: React.FC<SongRowProps> = ({
         </span>
       </div>
 
-      {/* 6. Action buttons: Heart & Context Menu (⋮) */}
+      {/* 6. Action buttons: Remove / Heart & Context Menu (⋮) */}
       <div className="flex items-center gap-1 shrink-0">
+        {/* Optional History Remove Button */}
+        {onRemove && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/[0.04] border border-white/[0.06] text-[#8e8e93] hover:text-red-300 hover:bg-red-500/10 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity focus-visible:opacity-100"
+            aria-label={`Remove ${track.title} from history`}
+            title="Remove from history"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
         {/* Heart Favorite Button */}
         <button
           type="button"

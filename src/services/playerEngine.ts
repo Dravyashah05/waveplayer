@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { Track } from '../types';
 import { playerStore } from './playerStore';
 import { logEvent } from './listeningStore';
+import { classifySkipPosition, type TechnicalErrorKind } from './affinityWeights';
 import { canRetryDirectStream } from './temporaryStreamCache';
 import { settingsStore } from './settingsStore';
 import { emitPlayerEvent } from './playerEvents';
@@ -96,6 +97,15 @@ function fmtForLog(s: number): number {
   return Math.max(0, Math.round(s));
 }
 
+/** Map a playback failure to a canonical technical-error kind (never taste). */
+function errorKindFor(message: string, streamSource?: string): TechnicalErrorKind {
+  if (streamSource === 'youtube-audio' || streamSource === 'youtube-iframe') return 'YOUTUBE_STREAM_FAILED';
+  if (streamSource === 'saavn') return 'SAAVN_STREAM_FAILED';
+  if (/network|fetch|timeout|offline|quota/i.test(message || '')) return 'NETWORK_ERROR';
+  if (/no playable|missing|not found|unavailable/i.test(message || '')) return 'MISSING_AUDIO';
+  return 'PLAYER_ERROR';
+}
+
 // ——— YouTube IFrame API loader (singleton promise) ———
 let ytApiPromise: Promise<void> | null = null;
 function loadYTApi(): Promise<void> {
@@ -160,6 +170,14 @@ class PlayerEngine {
   private originalTitle: string = typeof document !== 'undefined' ? document.title : 'Wave Player';
   private unsubStore: (() => void) | null = null;
   private loggedMilestones = new Set<number>();
+  // Listening-intelligence outcome tracking (one event per outcome, no spam):
+  // - hasPausedThisTrack: pause was recorded → a later play logs 'resume' once.
+  // - lastOutcomeTrackId: skip/complete/error already recorded for this track
+  //   so sync() track-change detection never double-logs explicit outcomes.
+  // - lastSeekLog: coalesces seek-slider drags to at most one event per 5s.
+  private hasPausedThisTrack = false;
+  private lastOutcomeTrackId: string | null = null;
+  private lastSeekLog: { trackId: string; at: number } | null = null;
 
   constructor() {
     this.unsubStore = playerStore.subscribe(() => this.sync());
@@ -207,6 +225,7 @@ class PlayerEngine {
     this.lastRevision = rev;
     const cur = playerStore.current();
     if (!cur) {
+      this.logTrackStop();
       this.stopAll();
       this.currentTrack = null;
       this.set({
@@ -224,8 +243,47 @@ class PlayerEngine {
       return;
     }
     this.loggedMilestones.clear();
+    this.logTrackChange(this.currentTrack);
+    this.hasPausedThisTrack = false;
     const isFirstLoad = this.currentTrack === null && this.snapshot.trackId === null;
     void this.loadTrack(cur, !isFirstLoad);
+  }
+
+  /**
+   * Track-change skip detection with the REAL playback position. Covers every
+   * path that swaps the current track without an explicit outcome already
+   * logged by next()/prev()/fail()/onEnded() (setIndex jumps, queue edits,
+   * crossfade handover, radio prefetch advance). Logs at most one skip per
+   * track; silent when nothing audible happened (progress ≤ 1s, not playing).
+   */
+  private logTrackChange(prev: Track | null) {
+    if (!prev || this.lastOutcomeTrackId === prev.id) return;
+    const progress = fmtForLog(this.snapshot.progress);
+    if (!this.snapshot.isPlaying && progress <= 1) return;
+    const duration = fmtForLog(this.snapshot.duration || prev.durationSeconds || 0);
+    try {
+      logEvent({
+        songId: prev.id, track: prev, event: 'skip', playedSeconds: progress, duration,
+        meta: { via: 'track-change', skipPosition: classifySkipPosition(progress, duration) },
+      });
+    } catch {}
+    this.lastOutcomeTrackId = prev.id;
+  }
+
+  /** A playing track vanished (queue cleared/emptied) — record a single skip. */
+  private logTrackStop() {
+    const prev = this.currentTrack;
+    if (!prev || this.lastOutcomeTrackId === prev.id) return;
+    const progress = fmtForLog(this.snapshot.progress);
+    if (!this.snapshot.isPlaying && progress <= 1) return;
+    const duration = fmtForLog(this.snapshot.duration || prev.durationSeconds || 0);
+    try {
+      logEvent({
+        songId: prev.id, track: prev, event: 'skip', playedSeconds: progress, duration,
+        meta: { via: 'stop', skipPosition: classifySkipPosition(progress, duration) },
+      });
+    } catch {}
+    this.lastOutcomeTrackId = prev.id;
   }
 
   /** Re-create a missing backend surface without interrupting playback state. */
@@ -309,6 +367,9 @@ class PlayerEngine {
     this.silenceSkipsThisTrack = 0;
     this.silenceStreak = 0;
     this.pendingSeek = null;
+    this.hasPausedThisTrack = false;
+    this.lastSeekLog = null;
+    this.lastOutcomeTrackId = null;
     this.failedIds.delete(track.id);
     this.set({
       trackId: track.id, backend: null, isPlaying: false,
@@ -603,8 +664,21 @@ class PlayerEngine {
       this.failedIds.add(track.id);
       this.set({ error: message, isBuffering: false, isPlaying: false });
       try {
-        logEvent({ songId: track.id, track, event: 'skip', playedSeconds: fmtForLog(this.snapshot.progress), duration: fmtForLog(this.snapshot.duration || track.durationSeconds || 0), meta: { via: 'error', reason: message } });
+        // Technical failure: recorded as a NEUTRAL 'error' event (never a
+        // skip/dislike). skip_counts, engagement and affinity all ignore it.
+        logEvent({
+          songId: track.id, track, event: 'error',
+          playedSeconds: fmtForLog(this.snapshot.progress),
+          duration: fmtForLog(this.snapshot.duration || track.durationSeconds || 0),
+          meta: {
+            via: 'error', technical: true,
+            errorKind: errorKindFor(message, this.snapshot.resolved?.source),
+            streamSource: this.snapshot.resolved?.source,
+            reason: message,
+          },
+        });
       } catch {}
+      this.lastOutcomeTrackId = track.id;
       playerStore.next();
       return;
     }
@@ -654,6 +728,30 @@ class PlayerEngine {
 
   private applyIntent() {
     const s = this.snapshot;
+    const t = this.currentTrack;
+    // Pause → record once (only when something audible was playing).
+    if (!this.wantPlay && s.isPlaying && t && s.trackId === t.id && !s.error) {
+      try {
+        logEvent({
+          songId: t.id, track: t, event: 'pause',
+          playedSeconds: fmtForLog(s.progress),
+          duration: fmtForLog(s.duration || t.durationSeconds || 0),
+        });
+      } catch {}
+      this.hasPausedThisTrack = true;
+    }
+    // Resume → record once (only after a recorded pause of the same track,
+    // so initial autoplay and repeat presses never double-log).
+    if (this.wantPlay && !s.isPlaying && this.hasPausedThisTrack && t && s.trackId === t.id && !s.error) {
+      try {
+        logEvent({
+          songId: t.id, track: t, event: 'resume',
+          playedSeconds: fmtForLog(s.progress),
+          duration: fmtForLog(s.duration || t.durationSeconds || 0),
+        });
+      } catch {}
+      this.hasPausedThisTrack = false;
+    }
     if (s.backend === 'audio' && this.audio) {
       if (this.wantPlay) {
         if (this.audio.paused) {
@@ -687,6 +785,19 @@ class PlayerEngine {
     const t = this.currentTrack;
     if (!t) return;
     const target = Math.max(0, Math.min(sec, this.snapshot.duration || sec));
+    // Seeks are user intent, not taste: coalesce slider drags to ≤1 event/5s.
+    const now = Date.now();
+    if (!this.lastSeekLog || this.lastSeekLog.trackId !== t.id || now - this.lastSeekLog.at > 5000) {
+      this.lastSeekLog = { trackId: t.id, at: now };
+      try {
+        logEvent({
+          songId: t.id, track: t, event: 'seek',
+          playedSeconds: fmtForLog(target),
+          duration: fmtForLog(this.snapshot.duration || t.durationSeconds || 0),
+          meta: { via: 'seek' },
+        });
+      } catch {}
+    }
     this.set({ progress: target });
     emitPlayerEvent({ type: 'SEEK', track: t, progress: target });
     const s = this.snapshot;
@@ -713,8 +824,14 @@ class PlayerEngine {
     const t = this.currentTrack;
     if (!t) return;
     try {
-      logEvent({ songId: t.id, track: t, event: 'skip', playedSeconds: fmtForLog(this.snapshot.progress), duration: fmtForLog(this.snapshot.duration || t.durationSeconds || 0) });
+      const progress = fmtForLog(this.snapshot.progress);
+      const duration = fmtForLog(this.snapshot.duration || t.durationSeconds || 0);
+      logEvent({
+        songId: t.id, track: t, event: 'skip', playedSeconds: progress, duration,
+        meta: { via: 'next', skipPosition: classifySkipPosition(progress, duration) },
+      });
     } catch {}
+    this.lastOutcomeTrackId = t.id;
     emitPlayerEvent({ type: 'TRACK_SKIP', track: t, progress: this.snapshot.progress, reason: 'next' });
     playerStore.next();
   }
@@ -731,8 +848,14 @@ class PlayerEngine {
       return;
     }
     try {
-      logEvent({ songId: t.id, track: t, event: 'skip', playedSeconds: fmtForLog(this.snapshot.progress), duration: fmtForLog(this.snapshot.duration || t.durationSeconds || 0) });
+      const progress = fmtForLog(this.snapshot.progress);
+      const duration = fmtForLog(this.snapshot.duration || t.durationSeconds || 0);
+      logEvent({
+        songId: t.id, track: t, event: 'skip', playedSeconds: progress, duration,
+        meta: { via: 'prev', skipPosition: classifySkipPosition(progress, duration) },
+      });
     } catch {}
+    this.lastOutcomeTrackId = t.id;
     playerStore.prev();
   }
 
@@ -740,9 +863,9 @@ class PlayerEngine {
     const t = this.currentTrack;
     if (!t) return;
     try {
-      logEvent({ songId: t.id, track: t, event: 'complete', playedSeconds: fmtForLog(this.snapshot.duration || t.durationSeconds || 0), duration: fmtForLog(this.snapshot.duration || t.durationSeconds || 0) });
+      logEvent({ songId: t.id, track: t, event: 'complete', playedSeconds: fmtForLog(this.snapshot.duration || t.durationSeconds || 0), duration: fmtForLog(this.snapshot.duration || t.durationSeconds || 0), meta: { via: 'ended' } });
     } catch {}
-    emitPlayerEvent({ type: 'TRACK_COMPLETE', track: t, duration: this.snapshot.duration || t.durationSeconds || 0 });
+    this.lastOutcomeTrackId = t.id;
     if (this.sleepEndOfTrack) {
       this.clearSleepTimer();
       this.wantPlay = false;

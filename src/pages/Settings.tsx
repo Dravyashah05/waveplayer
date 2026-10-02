@@ -10,6 +10,7 @@ import { listSources, getCustomSources, saveCustomSources, type AudioSource } fr
 import { setLastfmCredentials, lastfmConnected, setListenbrainzToken, listenbrainzConnected } from '../services/scrobbleProviders';
 import { discordState, setDiscordCompanion } from '../services/discordPresence';
 import { queueUserFiles, downloadItems, subscribeDownloads, clearFinishedDownloads } from '../services/downloads';
+import { clearScopedKey } from '../services/scopedStorage';
 import { listLocalFiles, playLocalFile, deleteLocalFile, type LocalFileMeta } from '../services/localLibrary';
 const Toggle: React.FC<{ value: boolean; onChange: () => void }> = ({ value, onChange }) => (
   <button onClick={onChange} className={`relative inline-flex h-6 w-11 items-center rounded-full border ${value ? 'bg-white border-white' : 'bg-white/10 border-white/10'}`}>
@@ -45,6 +46,7 @@ export const SettingsPage: React.FC = () => {
   const clearAll = () => {
     if (!confirm('Clear all Wave data?')) return;
     ['wave:queue', 'wave:index', 'wave:fav', 'wave:history', 'wave:shuffle', 'wave:repeat', 'wave:volume', 'wave:local_playlists', 'wave:recent_searches', 'wave:settings'].forEach((k) => localStorage.removeItem(k));
+    clearScopedKey('yt_history_v1');
     settingsStore.reset();
     setTimeout(() => window.location.reload(), 600);
   };

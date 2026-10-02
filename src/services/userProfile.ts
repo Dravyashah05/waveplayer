@@ -1,5 +1,7 @@
 import { Track } from '../types';
-import { getEventsForSong, skipPenalty } from './listeningStore';
+import { getEventsForSong, isTechnicalFailure, skipPenalty } from './listeningStore';
+import { AFFINITY_WEIGHTS } from './affinityWeights';
+import { getCachedYTMusicHistory } from './historyMerge';
 
 const LS_PROFILE = 'wave:user_profile';
 const LS_HISTORY = 'wave:history';
@@ -80,19 +82,25 @@ export function engagement(trackId: string): number {
   const now = Date.now();
   let s = 0;
   for (const e of evs) {
+    // Technical playback failures are neutral — never a taste signal.
+    if (isTechnicalFailure(e)) continue;
     const ageDays = Math.max(0, (now - new Date(e.timestamp).getTime()) / 86_400_000);
-    const decay = Math.exp(-ageDays / 21); // ~3-week half-life
+    const decay = Math.exp(-ageDays / AFFINITY_WEIGHTS.DECAY_DAYS); // ~3-week half-life
     switch (e.event) {
-      case 'like': s += 2 * decay; break;
-      case 'unlike': s -= 2 * decay; break;
-      case 'replay': s += 1.2 * decay; break;
-      case '10_percent': s += 0.04 * decay; break;
-      case '25_percent': s += 0.08 * decay; break;
-      case '50_percent': s += 0.12 * decay; break;
-      case '75_percent': s += 0.2 * decay; break;
-      case 'complete': s += (0.6 + 0.6 * Math.min(1, e.completionPercentage / 100)) * decay; break;
-      case 'play': s += 0.25 * decay; break;
-      case 'skip': s -= (0.4 + 1.2 * skipPenalty(e.playedSeconds || 0, e.duration || 0)) * decay; break;
+      case 'like': s += AFFINITY_WEIGHTS.like * decay; break;
+      case 'unlike': s += AFFINITY_WEIGHTS.unlike * decay; break;
+      case 'replay': s += AFFINITY_WEIGHTS.replay * decay; break;
+      case 'add_to_playlist': s += AFFINITY_WEIGHTS.addToPlaylist * decay; break;
+      case 'add_to_queue': s += AFFINITY_WEIGHTS.addToQueue * decay; break;
+      case 'resume': s += AFFINITY_WEIGHTS.resume * decay; break;
+      case 'search': s += AFFINITY_WEIGHTS.search * decay; break;
+      case '10_percent': s += AFFINITY_WEIGHTS.milestone10 * decay; break;
+      case '25_percent': s += AFFINITY_WEIGHTS.milestone25 * decay; break;
+      case '50_percent': s += AFFINITY_WEIGHTS.milestone50 * decay; break;
+      case '75_percent': s += AFFINITY_WEIGHTS.milestone75 * decay; break;
+      case 'complete': s += (AFFINITY_WEIGHTS.completeBase + AFFINITY_WEIGHTS.completeScale * Math.min(1, e.completionPercentage / 100)) * decay; break;
+      case 'play': s += AFFINITY_WEIGHTS.play * decay; break;
+      case 'skip': s -= (AFFINITY_WEIGHTS.skipBase + AFFINITY_WEIGHTS.skipScale * skipPenalty(e.playedSeconds || 0, e.duration || 0)) * decay; break;
       default: break;
     }
   }
@@ -128,6 +136,11 @@ export function buildProfile(): UserProfile {
   favs.forEach(t => pushTrack(t, clampW(1.2 + engagement(t.id))));
   recent.slice(0, 20).forEach((t, i) => pushTrack(t, clampW(0.7 * Math.pow(0.96, i) + engagement(t.id))));
   history.slice(0, 40).forEach((t, i) => pushTrack(t, clampW(0.4 * Math.pow(0.97, i) + engagement(t.id))));
+  // Imported YT Music history (cached, user-scoped) joins at a modest weight.
+  // Empty when the user never linked YT Music — zero behavior change then.
+  try {
+    getCachedYTMusicHistory().slice(0, 40).forEach((t, i) => pushTrack(t, clampW(0.35 * Math.pow(0.97, i))));
+  } catch {}
 
   const artistScores = scoreMap(artists, artistWeights);
   const langScores = scoreMap(langs, langWeights);

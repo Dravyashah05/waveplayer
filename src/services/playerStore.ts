@@ -243,11 +243,8 @@ class PlayerStore {
       const cur = this.current();
       this.pushHistory(cur);
       if (cur) logEvent({ songId: cur.id, track: cur, event: isReplay ? 'replay' : 'play', playedSeconds: 0, duration: cur.durationSeconds || 180 });
-      // if skipped quickly, log skip for previous
-      if (prev && !isReplay) {
-        // we don't have playedSeconds here; PlayerBar will log precise skip
-        logEvent({ songId: prev.id, track: prev, event: 'skip', playedSeconds: 5, duration: prev.durationSeconds || 180, meta: { via: 'setIndex' } });
-      }
+      // Skips for the previous track are logged by playerEngine with the real
+      // playback position (track-change detection) — never a placeholder here.
       this.emit();
     }
   }
@@ -313,6 +310,15 @@ class PlayerStore {
     save(LS_HISTORY, this.history);
   }
   clearHistory() { this.history = []; save(LS_HISTORY, []); this.emit(); }
+  removeHistoryEntry(id: string) {
+    if (!id) return;
+    const next = this.history.filter((t) => t?.id !== id);
+    if (next.length !== this.history.length) {
+      this.history = next;
+      save(LS_HISTORY, this.history);
+      this.emit();
+    }
+  }
 
   // helpers
   private rebuildShuffle() {

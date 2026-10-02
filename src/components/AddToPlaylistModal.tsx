@@ -9,6 +9,7 @@ import {
   addTrackToPlaylist,
   addTracksToPlaylist,
 } from '../services/libraryStore';
+import { logEvent } from '../services/listeningStore';
 
 interface AddToPlaylistModalProps {
   isOpen: boolean;
@@ -39,6 +40,19 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
 
   if (!isOpen || !tracks.length) return null;
 
+  const logPlaylistAdds = (playlistId: string) => {
+    // Strong positive taste signal (weighted centrally in affinityWeights).
+    for (const t of tracks) {
+      try {
+        logEvent({
+          songId: t.id, track: t, event: 'add_to_playlist',
+          playedSeconds: 0, duration: t.durationSeconds || 0,
+          meta: { playlistId },
+        });
+      } catch {}
+    }
+  };
+
   const handleCreateAndAdd = (e: React.FormEvent) => {
     e.preventDefault();
     const title = newTitle.trim();
@@ -49,6 +63,7 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
     setAddedPlaylistIds((prev) => new Set([...prev, newPl.id]));
     setNewTitle('');
     setShowCreate(false);
+    logPlaylistAdds(newPl.id);
     onSuccess?.(newPl.title, tracks.length);
     setTimeout(onClose, 600);
   };
@@ -61,6 +76,7 @@ export const AddToPlaylistModal: React.FC<AddToPlaylistModalProps> = ({
     }
     setAddedPlaylistIds((prev) => new Set([...prev, pl.id]));
     setPlaylists(getLocalPlaylists());
+    logPlaylistAdds(pl.id);
     onSuccess?.(pl.title, tracks.length);
     setTimeout(onClose, 600);
   };

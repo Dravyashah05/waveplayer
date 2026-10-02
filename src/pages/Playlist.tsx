@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { Track, Playlist } from '../types';
 import { getSaavnPlaylistDetails, searchSaavnPlaylists } from '../services/saavnApi';
+import { getYTMusicPlaylistDetails } from '../services/ytmusicLibrary';
 import { fetchRadio } from '../services/recommendationApi';
 import { playerStore } from '../services/playerStore';
 import {
@@ -67,9 +68,11 @@ const SORT_LABELS: Array<{ id: SortMode; label: string }> = [
 
 const isLocalRef = (id: string | undefined) => !!id && id.startsWith('local:');
 const localIdOf = (id: string) => id.slice('local:'.length);
+const isYtmusicRef = (id: string | undefined) => !!id && id.startsWith('ytmusic:');
 const sortKeyOf = (id: string) => `wave:playlist:sort:${id}`;
 
 function sourceBadge(source?: string, youtubeId?: string) {
+  if (source === 'ytmusic') return { label: 'YouTube Music', cls: 'bg-red-500/15 text-red-300 border-red-500/25' };
   if (source === 'youtube' || youtubeId) return { label: 'YouTube import', cls: 'bg-red-500/15 text-red-300 border-red-500/25' };
   if (source === 'youtube-pure') return { label: 'YouTube', cls: 'bg-red-500/15 text-red-300 border-red-500/25' };
   return { label: 'Wave Player', cls: 'bg-white/10 text-white/70 border-white/10' };
@@ -126,6 +129,7 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
       setSelected(new Set());
       setReorderMode(false);
       if (isLocalRef(playlistId)) loadLocalPlaylist(localIdOf(playlistId));
+      else if (isYtmusicRef(playlistId)) loadYTMusicPlaylist(playlistId);
       else loadPlaylist(playlistId);
     } else {
       loadFeaturedPlaylists();
@@ -170,6 +174,28 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
       if (res && res.playlist) {
         setPlaylist(res.playlist);
         setTracks(res.tracks || []);
+      } else {
+        setLoadError('This playlist is unavailable right now.');
+      }
+    } catch {
+      setLoadError('Could not load this playlist. Check your connection and retry.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // YT Music playlist detail (existing Express /api/ytmusic/* endpoints).
+  // Tracks reuse the shared detail UI + playerStore/playerEngine playback.
+  const loadYTMusicPlaylist = async (id: string) => {
+    setLoading(true);
+    setLoadError('');
+    setLocalPl(null);
+    try {
+      const res = await getYTMusicPlaylistDetails(id);
+      if (res && res.info) {
+        setPlaylist(res.info);
+        setTracks(res.tracks || []);
+        if (!res.tracks.length) setLoadError('');
       } else {
         setLoadError('This playlist is unavailable right now.');
       }
@@ -260,13 +286,16 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
       };
     }
     if (playlist) {
+      const isYTMusic = playlist.source === 'ytmusic';
       return {
         title: playlist.name,
         description: playlist.description || '',
-        owner: playlist.author || 'JioSaavn Editorial',
+        owner: playlist.author || (isYTMusic ? 'YouTube Music' : 'JioSaavn Editorial'),
         cover: playlist.thumbnails?.[0]?.url || '',
         privacy: undefined,
-        badge: { label: 'JioSaavn', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/25' },
+        badge: isYTMusic
+          ? { label: 'YouTube Music', cls: 'bg-red-500/15 text-red-300 border-red-500/25' }
+          : { label: 'JioSaavn', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/25' },
         showLocalOrder: false,
       };
     }

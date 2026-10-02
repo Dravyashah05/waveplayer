@@ -13,7 +13,9 @@
 // - Audio playback runs in the page, never in the worker: worker updates
 //   cannot interrupt MediaSession or background audio.
 
-const CACHE = 'wave-v2';
+// Bump this when the app shell routing changes so installed clients discard
+// cached bundles that still call removed API endpoints.
+const CACHE = 'wave-v3';
 const CORE = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 const MAX_RUNTIME = 150;
 

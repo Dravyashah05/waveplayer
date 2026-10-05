@@ -31,7 +31,11 @@ function isDirectAudioFormat(value: unknown): value is AudioFormat & { url: stri
   if (!isRecord(value) || typeof value.url !== 'string' || typeof value.mimeType !== 'string') return false;
   try {
     const url = new URL(value.url);
-    return url.protocol === 'https:' && /(^|\.)googlevideo\.com$/i.test(url.hostname) && /^audio\//i.test(value.mimeType);
+    if (url.protocol !== 'https:') return false;
+    const hostOk = /^(.+\.)?googlevideo\.com$/i.test(url.hostname) || /^r\d+(-.+)?\.googlevideo\.com$/i.test(url.hostname);
+    const mimeOk = /^audio\//i.test(value.mimeType);
+    if (!mimeOk) return false;
+    return hostOk;
   } catch {
     return false;
   }

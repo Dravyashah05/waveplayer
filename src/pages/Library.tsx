@@ -1257,7 +1257,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-[14px] font-bold text-white group-hover:text-white">
+                          <p className="line-clamp-2 text-[14px] font-bold text-white group-hover:text-white">
                             {pl.title}
                           </p>
                           <p className="truncate text-xs text-white/50 mt-0.5">
@@ -1368,7 +1368,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
                             }}
                             className="min-w-0 flex-1 text-left"
                           >
-                            <p className="truncate text-sm font-bold text-white">
+                            <p className="line-clamp-2 text-sm font-bold text-white">
                               {playlist.title}
                               <span className="ml-2 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[9.5px] font-bold text-red-300">
                                 YouTube
@@ -1936,4 +1936,3 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
     </div>
   );
 };
-

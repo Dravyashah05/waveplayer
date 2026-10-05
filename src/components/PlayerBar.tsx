@@ -58,9 +58,11 @@ interface Props {
   onOpenQueue?: () => void;
   /** Dedicated Now Playing page (MiniPlayer tap). Falls back to the overlay. */
   onOpenNowPlaying?: () => void;
+  /** Hide the mini-player dock (used when the fullscreen Now Playing takeover is showing). */
+  hideMini?: boolean;
 }
 
-export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) => {
+export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying, hideMini = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -302,6 +304,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
   const seekValue = Math.min(Math.round(progress), seekMax);
 
   if (!track) {
+    if (hideMini) return null;
     return (
       <div className="fixed bottom-[calc(76px+env(safe-area-inset-bottom))] lg:bottom-6 left-1/2 -translate-x-1/2 w-[calc(100%-14px)] sm:w-[calc(100%-28px)] max-w-[560px] lg:max-w-[640px] z-30 rounded-[24px] px-4 py-3 border border-white/[0.10] bg-[#0c0c0e]/95 backdrop-blur-xl shadow-[0_16px_48px_rgba(0,0,0,0.7)] select-none">
         <div className="flex items-center justify-center gap-2.5 text-xs sm:text-sm text-white/50">
@@ -316,20 +319,22 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
 
   return (
     <>
-      <MiniPlayer
-        track={track}
-        isPlaying={isPlaying}
-        isBuffering={isBuffering}
-        progress={progress}
-        duration={effectiveDuration}
-        isFav={isFav}
-        onOpen={openPlayer}
-        onToggle={togglePlay}
-        onNext={handleNext}
-        onPrev={handlePrev}
-        onToggleFav={toggleFav}
-        onOpenQueue={onOpenQueue}
-      />
+      {!hideMini && (
+        <MiniPlayer
+          track={track}
+          isPlaying={isPlaying}
+          isBuffering={isBuffering}
+          progress={progress}
+          duration={effectiveDuration}
+          isFav={isFav}
+          onOpen={openPlayer}
+          onToggle={togglePlay}
+          onNext={handleNext}
+          onPrev={handlePrev}
+          onToggleFav={toggleFav}
+          onOpenQueue={onOpenQueue}
+        />
+      )}
 
       {/* Hidden YouTube surface mount */}
       <div
@@ -371,22 +376,25 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
               <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-transparent" />
             </div>
 
-            {/* Top Bar — background removed */}
-            <div className="relative z-20 p-4 sm:p-5">
-              <div className="mx-auto max-w-6xl flex items-center justify-between gap-3 px-3 py-2 rounded-full border border-transparent bg-transparent">
-                <button
-                  type="button"
-                  onClick={() => setFullscreen(false)}
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black hover:bg-white/90 shadow-sm transition-all active:scale-95"
-                  title="Close"
-                  aria-label="Close fullscreen player"
-                >
-                  <ChevronDown className="h-5 w-5" />
-                </button>
+            {/* Top Bar — redesigned: drag cue + eyebrow + glass actions */}
+            <div className="relative z-20 px-4 pt-3 sm:px-6 sm:pt-4">
+              <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-2">
+                <div className="h-1 w-10 rounded-full bg-white/25" aria-hidden />
+                <div className="flex w-full items-center justify-between gap-3 py-1">
+                  <button
+                    type="button"
+                    onClick={() => setFullscreen(false)}
+                    className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/10 text-white backdrop-blur-xl transition-all hover:bg-white hover:text-black active:scale-95"
+                    title="Close"
+                    aria-label="Close fullscreen player"
+                  >
+                    <ChevronDown className="h-5 w-5" />
+                  </button>
 
-                <div className="flex items-center gap-2">
-                  <p className="text-[18px] sm:text-[19px] font-extrabold tracking-[-0.03em] leading-none text-white" style={{ color: '#ffffff' }}>Wave</p>
-                </div>
+                  <div className="flex min-w-0 flex-col items-center leading-none">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-white/45">Now Playing</p>
+                    <p className="mt-1 max-w-[40vw] truncate text-[13px] font-semibold text-white/85 sm:max-w-md">{track.author}{radioActive ? ' • Radio' : ''}</p>
+                  </div>
 
                 <div className="relative shrink-0" ref={menuRef}>
                   <button
@@ -500,36 +508,56 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
                 </div>
               </div>
             </div>
+            </div>
 
             {/* Center — adaptive layout, scrolls on short screens */}
             <div className="relative z-10 flex-1 min-h-0 w-full max-w-7xl mx-auto flex flex-col lg:flex-row gap-4 sm:gap-6 lg:gap-8 px-4 sm:px-6 lg:px-8 pb-4 overflow-y-auto scrollbar-none">
-              {/* Art Section */}
-              <div className={`flex flex-col items-center justify-center gap-4 sm:gap-5 shrink-0 ${showFsLyrics ? 'lg:w-[44%] lg:py-6' : 'lg:flex-1 py-1 sm:py-2'}`}>
-                <div className="relative group">
-                  {/* vinyl glow */}
+              {/* Art Section — redesigned stage */}
+              <div className={`flex flex-col items-center justify-center gap-5 shrink-0 ${showFsLyrics ? 'lg:w-[44%] lg:py-6' : 'lg:flex-1 py-2'}`}>
+                <div className="relative">
+                  {/* ambient glow */}
+                  <div aria-hidden className="absolute -inset-6 overflow-hidden rounded-[40px] opacity-50 blur-3xl">
+                    <ArtworkImage src={track.thumbnail} alt="" className="h-full w-full scale-110 object-cover" referrerPolicy="no-referrer" />
+                  </div>
                   <motion.div
-                    animate={{ scale: isPlaying ? 1 : 0.97, rotate: isPlaying ? 0 : 0 }}
+                    animate={{ scale: isPlaying ? 1 : 0.975 }}
                     transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-                    className={`relative rounded-[24px] sm:rounded-[28px] overflow-hidden shadow-[0_24px_64px_rgba(0,0,0,0.75),0_8px_20px_rgba(0,0,0,0.4)] ring-1 ring-white/15 bg-[#0f0f0f] shrink-0 ${showFsLyrics ? 'w-[clamp(140px,44vw,220px)] h-[clamp(140px,44vw,220px)] sm:w-[280px] sm:h-[280px] lg:w-[380px] lg:h-[380px]' : 'w-[clamp(180px,62vw,260px)] h-[clamp(180px,62vw,260px)] sm:w-[340px] sm:h-[340px] lg:w-[380px] lg:h-[380px]'}`}
+                    className={`relative overflow-hidden rounded-[28px] sm:rounded-[32px] bg-[#0f0f0f] shadow-[0_32px_80px_rgba(0,0,0,0.8)] ring-1 ring-white/20 shrink-0 ${showFsLyrics ? 'h-[clamp(140px,44vw,220px)] w-[clamp(140px,44vw,220px)] sm:h-[280px] sm:w-[280px] lg:h-[360px] lg:w-[360px]' : 'h-[clamp(200px,64vw,280px)] w-[clamp(200px,64vw,280px)] sm:h-[340px] sm:w-[340px] lg:h-[400px] lg:w-[400px]'}`}
                   >
                     <ArtworkImage src={track.thumbnail} alt={track.title} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
-                    {/* inner glass sheen */}
-                    <div className="absolute inset-0 rounded-[28px] border border-white/10 pointer-events-none bg-gradient-to-br from-white/[0.07] via-transparent to-transparent" />
-                    {/* playing ring */}
-                    {isPlaying && <div className="absolute inset-0 rounded-[28px] ring-1 ring-white/20 pointer-events-none animate-pulse" />}
+                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-white/[0.08]" />
+                    <div className="pointer-events-none absolute inset-0 rounded-[inherit] border border-white/10" />
+                    {isBuffering && (
+                      <div className="absolute inset-0 grid place-items-center bg-black/40 backdrop-blur-[2px]">
+                        <Loader2 className="h-8 w-8 animate-spin text-white" />
+                      </div>
+                    )}
                   </motion.div>
+                  {/* floating like */}
+                  <button
+                    type="button"
+                    onClick={toggleFav}
+                    aria-label={isFav ? 'Unlike' : 'Like'}
+                    className={`absolute -bottom-3 right-4 flex h-11 w-11 items-center justify-center rounded-full shadow-xl ring-1 transition-all active:scale-90 ${isFav ? 'bg-white text-red-500 ring-white' : 'border border-white/15 bg-black/60 text-white backdrop-blur-xl hover:bg-white hover:text-black'}`}
+                  >
+                    <Heart className={`h-5 w-5 ${isFav ? 'fill-current' : ''}`} />
+                  </button>
                 </div>
 
-                <div className="w-full max-w-[380px] text-center space-y-1.5 sm:space-y-2 px-2">
-                  <h2 className="text-[19px] min-[400px]:text-[22px] sm:text-[26px] font-black tracking-[-0.02em] leading-tight text-white line-clamp-2 break-words">{track.title}</h2>
-                  <p className="text-[12px] sm:text-[13px] font-medium text-white/70 truncate">{track.author} {track.albumName ? `• ${track.albumName}` : ''}</p>
-                  <div className="flex items-center justify-center gap-2 pt-1">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-white/10 border border-white/10 px-2.5 py-1 text-[11px] font-medium text-white/70">
-                      <Music2 className="h-3 w-3" /> {track.type || 'SONG'}
+                <div className="w-full max-w-[420px] space-y-2 px-2 text-center">
+                  <h2 className="break-words text-[24px] font-black leading-[1.05] tracking-[-0.03em] text-white line-clamp-2 min-[400px]:text-[28px] sm:text-[32px]">{track.title}</h2>
+                  <p className="truncate text-[13px] font-medium text-white/60 sm:text-[14px]">{track.author}{track.albumName ? ` — ${track.albumName}` : ''}</p>
+                  <div className="flex items-center justify-center gap-1.5 pt-1.5">
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.07] px-3 py-1 text-[11px] font-semibold text-white/70 backdrop-blur">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" aria-hidden />
+                      {track.type || 'SONG'}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.07] px-3 py-1 text-[11px] font-semibold text-white/70 backdrop-blur">
+                      <Music2 className="h-3 w-3" /> {track.source === 'ytmusic' ? 'YouTube Music' : track.source ?? 'Wave'}
                     </span>
                     {lyricsSource && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-white text-black px-2.5 py-1 text-[11px] font-bold">
-                        <Mic2 className="h-3 w-3" /> {lyricsSource}
+                      <span className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-black">
+                        <Mic2 className="h-3 w-3" /> Lyrics
                       </span>
                     )}
                   </div>
@@ -564,9 +592,9 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
               </div>
             </div>
 
-            {/* Bottom — progress + controls dock - background removed */}
-            <div className="relative z-10 p-3 sm:p-5 pb-[max(12px,env(safe-area-inset-bottom))]">
-              <div className="mx-auto max-w-5xl p-2 sm:p-4">
+            {/* Bottom — redesigned floating glass dock */}
+            <div className="relative z-10 px-3 pb-[max(14px,env(safe-area-inset-bottom))] sm:px-6 sm:pb-6">
+              <div className="mx-auto w-full max-w-2xl rounded-[28px] border border-white/10 bg-white/[0.07] p-4 shadow-[0_24px_64px_rgba(0,0,0,0.6)] backdrop-blur-2xl sm:p-5">
                 {error && (
                   <div className="mb-3 flex items-center gap-2.5 rounded-2xl border border-white/10 bg-white/[0.06] backdrop-blur px-3.5 py-2.5">
                     <AlertTriangle className="h-4 w-4 text-white/70 shrink-0" />
@@ -579,20 +607,19 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
                     </button>
                   </div>
                 )}
-                {/* progress — tall hit area, invisible native input over a custom bar */}
-                <div className="flex items-center gap-3 mb-3">
-                  <span className="text-xs font-mono font-medium text-white/60 w-10 text-right tabular-nums">{fmt(progress)}</span>
-                  <div className="flex-1 relative h-6 flex items-center group/progress">
-                    <div className="relative h-[5px] w-full rounded-full bg-white/15 overflow-hidden">
-                      <div className="h-full bg-white rounded-full transition-[width] duration-150" style={{ width: `${pct}%` }} />
+                {/* progress — redesigned chunky bar */}
+                <div className="flex items-center gap-3">
+                  <span className="w-10 text-right text-[11px] font-semibold tabular-nums text-white/60">{fmt(progress)}</span>
+                  <div className="group/progress relative flex h-7 flex-1 items-center">
+                    <div className="relative h-[6px] w-full overflow-hidden rounded-full bg-white/15">
+                      <div className="h-full rounded-full bg-gradient-to-r from-white/80 to-white shadow-[0_0_12px_rgba(255,255,255,0.45)] transition-[width] duration-150" style={{ width: `${pct}%` }} />
                     </div>
-                    {/* visible thumb — appears on hover / while dragging / keyboard focus */}
                     <div
                       aria-hidden
-                      className="pointer-events-none absolute top-1/2 -translate-y-1/2 opacity-0 scale-75 group-hover/progress:opacity-100 group-hover/progress:scale-100 group-focus-within/progress:opacity-100 group-focus-within/progress:scale-100 group-active/progress:opacity-100 group-active/progress:scale-100 transition-all duration-150"
-                      style={{ left: `calc(${(seekMax > 0 ? (seekValue / seekMax) * 100 : 0).toFixed(2)}% )` }}
+                      className="pointer-events-none absolute top-1/2 -translate-y-1/2 transition-all duration-150 sm:opacity-0 sm:scale-75 sm:group-hover/progress:opacity-100 sm:group-hover/progress:scale-100"
+                      style={{ left: `calc(${(seekMax > 0 ? (seekValue / seekMax) * 100 : 0).toFixed(2)}%)` }}
                     >
-                      <div className="h-3.5 w-3.5 -translate-x-1/2 rounded-full bg-white shadow-[0_2px_10px_rgba(0,0,0,0.6)] ring-4 ring-white/10" />
+                      <div className="h-4 w-4 -translate-x-1/2 rounded-full bg-white shadow-[0_2px_12px_rgba(0,0,0,0.6)] ring-4 ring-white/20" />
                     </div>
                     <input
                       type="range"
@@ -608,85 +635,102 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
                       onTouchEnd={seekEnd}
                       onBlur={seekEnd}
                       aria-label="Seek"
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                       style={{ margin: 0 }}
                     />
                   </div>
-                  <span className="text-xs font-mono font-medium text-white/60 w-10 tabular-nums">{fmt(effectiveDuration)}</span>
+                  <span className="w-10 text-[11px] font-semibold tabular-nums text-white/60">{fmt(effectiveDuration)}</span>
                 </div>
 
-                {/* dock — queue left, controls centered (stack-safe on narrow screens) */}
-                <div className="flex items-center justify-between gap-1.5 sm:gap-2">
-                  <div className="flex items-center shrink-0">
-                    <button type="button" onClick={() => onOpenQueue?.()} className="h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center bg-white/10 border border-white/10 text-white hover:bg-white hover:text-black backdrop-blur relative" title={`Queue • ${queue.length}${radioActive ? ' • Radio on' : ''}`}>
-                      <ListMusic className="h-4 w-4" />
-                      {queue.length > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-white text-black text-[10px] font-bold grid place-items-center ring-1 ring-black/10">{queue.length}</span>}
-                      {radioActive && <span className="absolute -bottom-0.5 -right-0.5 grid h-4 w-4 place-items-center rounded-full bg-white text-black ring-1 ring-black/20" title="Radio session active"><Radio className="h-2.5 w-2.5" /></span>}
+                {/* dock — redesigned 5-cluster */}
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <button type="button" onClick={() => onOpenQueue?.()} className="relative flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.08] text-white backdrop-blur transition-all hover:bg-white hover:text-black active:scale-95" title={`Queue • ${queue.length}${radioActive ? ' • Radio on' : ''}`}>
+                      <ListMusic className="h-[18px] w-[18px]" />
+                      {queue.length > 0 && <span className="absolute -right-1 -top-1 grid h-5 min-w-[20px] place-items-center rounded-full bg-white px-1 text-[10px] font-black text-black ring-2 ring-black/40">{queue.length}</span>}
+                      {radioActive && <span className="absolute -bottom-0.5 -right-0.5 grid h-4 w-4 place-items-center rounded-full bg-emerald-400 text-black ring-2 ring-black/40" title="Radio session active"><Radio className="h-2.5 w-2.5" /></span>}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => playerStore.toggleShuffle()}
+                      aria-pressed={shuffle}
+                      title="Shuffle"
+                      className={`hidden h-10 w-10 items-center justify-center rounded-full border transition-all active:scale-95 sm:flex ${shuffle ? 'border-white bg-white text-black' : 'border-white/10 bg-white/[0.06] text-white/60 hover:text-white'}`}
+                    >
+                      <Shuffle className="h-4 w-4" />
                     </button>
                   </div>
-                  <div className="flex items-center justify-center gap-1 sm:gap-1.5 min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-1 items-center justify-center gap-2 sm:gap-3">
                     <button
                       type="button"
                       onClick={handlePrev}
-                      className="h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center bg-white/10 border border-white/10 text-white hover:bg-white hover:text-black backdrop-blur transition-all active:scale-95 shrink-0"
-                      title="Prev"
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white transition-all hover:bg-white/10 active:scale-90"
+                      title="Previous"
                       aria-label="Previous track"
                     >
-                      <SkipBack className="h-3.5 w-3.5 sm:h-4 sm:w-4 fill-current" />
+                      <SkipBack className="h-5 w-5 fill-current" />
                     </button>
                     <button
                       type="button"
                       onClick={togglePlay}
-                      className="h-10 w-10 sm:h-12 sm:w-12 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 shadow-[0_8px_20px_rgba(0,0,0,0.5)] transition-all shrink-0"
+                      className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white text-black shadow-[0_12px_32px_rgba(255,255,255,0.25)] transition-all hover:scale-105 active:scale-95 sm:h-16 sm:w-16"
                       title={isPlaying ? 'Pause' : 'Play'}
                       aria-label={isPlaying ? 'Pause' : 'Play'}
                     >
                       {isBuffering
-                        ? <Loader2 className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" />
+                        ? <Loader2 className="h-6 w-6 animate-spin" />
                         : isPlaying
-                          ? <Pause className="h-4 w-4 sm:h-5 sm:w-5 fill-current" />
-                          : <Play className="h-4 w-4 sm:h-5 sm:w-5 fill-current ml-0.5" />}
+                          ? <Pause className="h-6 w-6 fill-current" />
+                          : <Play className="ml-1 h-6 w-6 fill-current" />}
                     </button>
                     <button
                       type="button"
                       onClick={handleNext}
-                      className="h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center bg-white/10 border border-white/10 text-white hover:bg-white hover:text-black backdrop-blur transition-all active:scale-95 shrink-0"
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white transition-all hover:bg-white/10 active:scale-90"
                       title="Next"
                       aria-label="Next track"
                     >
-                      <SkipForward className="h-3.5 w-3.5 sm:h-4 sm:w-4 fill-current" />
+                      <SkipForward className="h-5 w-5 fill-current" />
                     </button>
                   </div>
 
-                  <div className="hidden lg:flex items-center gap-2 shrink-0 mr-1">
-                    <button
-                      type="button"
-                      onClick={() => playerEngine.toggleMute()}
-                      aria-label={muted ? 'Unmute' : 'Mute'}
-                      title={muted ? 'Unmute' : 'Mute'}
-                      className="h-8 w-8 rounded-full flex items-center justify-center text-white/70 hover:bg-white hover:text-black active:scale-90 transition-all"
-                    >
-                      {muted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                    </button>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={muted ? 0 : volume}
-                      onChange={(e) => playerEngine.setVolume(Number(e.target.value))}
-                      aria-label="Volume"
-                      className="w-24 accent-white"
-                    />
-                  </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
-                      onClick={() => setShowFsLyrics((v) => !v)}
-                      className={`h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center border transition-all ${showFsLyrics ? 'bg-white text-black border-white shadow' : 'bg-white/10 border-white/10 text-white/70 hover:bg-white hover:text-black backdrop-blur'}`}
-                      title={showFsLyrics ? 'Hide panel' : 'Show lyrics/queue'}
+                      onClick={() => playerStore.cycleRepeat()}
+                      title={repeat === 'one' ? 'Repeat one' : repeat === 'all' ? 'Repeat queue' : 'Repeat off'}
+                      aria-label={repeat === 'one' ? 'Repeat one' : repeat === 'all' ? 'Repeat queue' : 'Repeat off'}
+                      className={`hidden h-10 w-10 items-center justify-center rounded-full border transition-all active:scale-95 sm:flex ${repeat !== 'off' ? 'border-white bg-white text-black' : 'border-white/10 bg-white/[0.06] text-white/60 hover:text-white'}`}
                     >
-                      {showFsLyrics ? <X className="h-4 w-4" /> : <Mic2 className="h-4 w-4" />}
+                      {repeat === 'one' ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
+                    </button>
+                    <div className="hidden items-center gap-2 lg:flex">
+                      <button
+                        type="button"
+                        onClick={() => playerEngine.toggleMute()}
+                        aria-label={muted ? 'Unmute' : 'Mute'}
+                        className="flex h-10 w-10 items-center justify-center rounded-full text-white/70 transition-all hover:bg-white/10 hover:text-white active:scale-90"
+                      >
+                        {muted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                      </button>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={muted ? 0 : volume}
+                        onChange={(e) => playerEngine.setVolume(Number(e.target.value))}
+                        aria-label="Volume"
+                        className="w-20 accent-white"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowFsLyrics((v) => !v)}
+                      className={`flex h-10 w-10 items-center justify-center rounded-full border transition-all active:scale-95 ${showFsLyrics ? 'border-white bg-white text-black shadow-lg' : 'border-white/10 bg-white/[0.08] text-white/75 backdrop-blur hover:bg-white hover:text-black'}`}
+                      title={showFsLyrics ? 'Hide lyrics' : 'Show lyrics'}
+                    >
+                      {showFsLyrics ? <X className="h-[18px] w-[18px]" /> : <Mic2 className="h-[18px] w-[18px]" />}
                     </button>
                   </div>
                 </div>

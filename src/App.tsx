@@ -6,7 +6,7 @@ import { DesktopSidebar } from './components/layout/DesktopSidebar';
 import { ArtworkBackground } from './components/ui/ArtworkBackground';
 import { PlayerBar } from './components/PlayerBar';
 import { QueueDrawer } from './components/QueueDrawer';
-import { ToastViewport } from './components/Toast';
+import { ToastViewport, toast } from './components/Toast';
 import { PwaChrome } from './components/PwaChrome';
 import { RouteBoundary } from './components/RouteBoundary';
 import { BottomNavigation } from './components/BottomNavigation';
@@ -35,7 +35,8 @@ import { startScrobbleService } from './services/scrobbleService';
 import { registerScrobbleProviders } from './services/scrobbleProviders';
 import { startDiscordPresence } from './services/discordPresence';
 import { settingsStore } from './services/settingsStore';
-import { Track } from './types';
+import { Playlist, Track } from './types';
+import { playPlaylist } from './services/playlistPlayback';
 
 type Page = 'discover' | 'explore' | 'search' | 'artist' | 'album' | 'playlist' | 'nowplaying' | 'songs' | 'playlists' | 'albums' | 'artists' | 'all' | 'liked' | 'history' | 'settings' | 'profile';
 
@@ -101,6 +102,7 @@ function AppContent() {
   const [glassEnabled, setGlassEnabled] = useState(() => settingsStore.get().glassEnabled);
   const [glassIntensity, setGlassIntensity] = useState(() => settingsStore.get().glassIntensity);
   const sugTimeout = useRef<number | null>(null);
+  const playlistPlaybackPending = useRef(false);
 
   // Smart autoplay
   useEffect(() => startAutoplay(), []);
@@ -262,6 +264,20 @@ function AppContent() {
     if (idx === -1) playerStore.setQueue([track], 0);
   };
 
+  const handlePlayPlaylist = async (playlist: Playlist) => {
+    if (playlistPlaybackPending.current) return;
+    playlistPlaybackPending.current = true;
+    toast.info(`Loading ${playlist.name}…`);
+    try {
+      await playPlaylist(playlist);
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      toast.error(code === 'NO_PLAYABLE_TRACKS' ? 'This playlist has no playable tracks.' : 'Unable to load this playlist.');
+    } finally {
+      playlistPlaybackPending.current = false;
+    }
+  };
+
   const removeFromQueue = (idx: number) => { playerStore.removeFromQueue(idx); };
   const playIndex = (i: number) => playerStore.setIndex(i);
 
@@ -299,9 +315,9 @@ function AppContent() {
   const canGoBack = navStack.length > 1 || page !== 'discover';
 
   const renderPage = () => {
-    if (page === 'discover') return <HomePage onPlay={playTrack} onPlayPlaylist={(id) => navigate('playlist', id)} onNavigate={(p, param) => navigate(p as Page, param)} history={queue.length ? queue : favs.length ? favs : history} />;
-    if (page === 'search') return <SearchPage onPlay={playTrack} initialQuery={query} onQueryChange={setQuery} onNavigate={(p, param) => navigate(p as Page, param)} />;
-    if (page === 'explore') return <ExplorePage onPlay={playTrack} onPlayPlaylist={(id) => navigate('playlist', id)} onSearch={(q) => { setQuery(q); navigate('search'); }} onNavigate={(p, param) => navigate(p as Page, param)} />;
+    if (page === 'discover') return <HomePage onPlay={playTrack} onPlayPlaylist={(playlist) => void handlePlayPlaylist(playlist)} onNavigate={(p, param) => navigate(p as Page, param)} history={queue.length ? queue : favs.length ? favs : history} />;
+    if (page === 'search') return <SearchPage onPlay={playTrack} onPlayPlaylist={(playlist) => void handlePlayPlaylist(playlist)} initialQuery={query} onQueryChange={setQuery} onNavigate={(p, param) => navigate(p as Page, param)} />;
+    if (page === 'explore') return <ExplorePage onPlay={playTrack} onPlayPlaylist={(playlist) => void handlePlayPlaylist(playlist)} onSearch={(q) => { setQuery(q); navigate('search'); }} onNavigate={(p, param) => navigate(p as Page, param)} />;
     if (page === 'artist') return <ArtistPage artistId={pageParam} onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} onBack={goBack} />;
     if (page === 'album') return <AlbumPage albumId={pageParam} onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} onBack={goBack} />;
     if (page === 'playlist') return <PlaylistPage playlistId={pageParam} onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} onBack={goBack} />;
@@ -312,50 +328,60 @@ function AppContent() {
     if (page === 'liked') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="favs" />;
     if (page === 'history') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="recent" />;
     if (page === 'songs') return <LibraryPage onPlay={playTrack} onNavigate={(p, param) => navigate(p as Page, param)} initialTab="songs" />;
-    return <HomePage onPlay={playTrack} onPlayPlaylist={(id) => navigate('playlist', id)} onNavigate={(p, param) => navigate(p as Page, param)} history={queue.length ? queue : favs.length ? favs : history} />;
+    return <HomePage onPlay={playTrack} onPlayPlaylist={(playlist) => void handlePlayPlaylist(playlist)} onNavigate={(p, param) => navigate(p as Page, param)} history={queue.length ? queue : favs.length ? favs : history} />;
   };
+
+  // Fullscreen takeover for Now Playing — strip all app chrome so only
+  // the player panel is visible (no header, sidebar, nav, mini player).
+  const isNowPlaying = page === 'nowplaying';
 
   return (
     <div className="flex h-[100dvh] w-full max-w-[100vw] overflow-hidden bg-black text-white antialiased selection:bg-white selection:text-black">
-      {/* Artwork-driven ambient background */}
-      <ArtworkBackground thumbnail={current?.thumbnail} />
+      {/* Artwork-driven ambient background (hidden in Now Playing takeover) */}
+      {!isNowPlaying && <ArtworkBackground thumbnail={current?.thumbnail} />}
 
-      {/* Desktop Sidebar (hidden on mobile) */}
-      <DesktopSidebar
-        active={page}
-        onNavigate={(p, param) => navigate(p as Page, param)}
-        favCount={favs.length}
-      />
+      {/* Desktop Sidebar (hidden on mobile + Now Playing takeover) */}
+      {!isNowPlaying && (
+        <DesktopSidebar
+          active={page}
+          onNavigate={(p, param) => navigate(p as Page, param)}
+          favCount={favs.length}
+        />
+      )}
 
       {/* Main Content Column */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden relative">
-        {/* App Top Bar */}
-        <AppHeader
-          query={query}
-          onQueryChange={(v) => {
-            setQuery(v);
-            if (v.trim().length >= 1) setShowSug(true);
-            else setShowSug(false);
-          }}
-          onSearch={handleNavbarSearch}
-          onNavigateSearch={handleNavbarSearch}
-          suggestions={showSug ? suggestions : []}
-          onSelectSuggestion={handleSuggestionSelect}
-          onFocusSuggestions={() => {
-            prefetchPage('search');
-            if (query.trim()) setShowSug(true);
-          }}
-          isFullscreen={isAppFs}
-          onToggleFullscreen={toggleFs}
-          onNavigate={(p, param) => navigate(p as Page, param)}
-          canGoBack={canGoBack}
-          onBack={goBack}
-          active={page}
-        />
+        {/* App Top Bar (hidden in Now Playing takeover) */}
+        {!isNowPlaying && (
+          <AppHeader
+            query={query}
+            onQueryChange={(v) => {
+              setQuery(v);
+              if (v.trim().length >= 1) setShowSug(true);
+              else setShowSug(false);
+            }}
+            onSearch={handleNavbarSearch}
+            onNavigateSearch={handleNavbarSearch}
+            suggestions={showSug ? suggestions : []}
+            onSelectSuggestion={handleSuggestionSelect}
+            onFocusSuggestions={() => {
+              prefetchPage('search');
+              if (query.trim()) setShowSug(true);
+            }}
+            isFullscreen={isAppFs}
+            onToggleFullscreen={toggleFs}
+            onNavigate={(p, param) => navigate(p as Page, param)}
+            canGoBack={canGoBack}
+            onBack={goBack}
+            active={page}
+          />
+        )}
 
         {/* Scrollable Main Area */}
         <main className="flex-1 min-w-0 overflow-y-auto scrollbar-thin scroll-smooth overflow-x-clip">
-          <div className="w-full max-w-7xl mx-auto px-3.5 min-[400px]:px-4 sm:px-6 lg:px-8 pt-3 sm:pt-6 pb-[calc(148px+env(safe-area-inset-bottom))] lg:pb-[110px]">
+          <div className={isNowPlaying
+            ? 'w-full'
+            : 'w-full max-w-7xl mx-auto px-3.5 min-[400px]:px-4 sm:px-6 lg:px-8 pt-3 sm:pt-6 pb-[calc(148px+env(safe-area-inset-bottom))] lg:pb-[110px]'}>
             <AnimatePresence mode="wait">
               <motion.div
                 key={page}
@@ -451,16 +477,19 @@ function AppContent() {
         )}
       </AnimatePresence>
 
-      {/* Persistent Player Chrome + Bottom Navigation */}
+      {/* Persistent Player Chrome + Bottom Navigation (chrome hidden in Now Playing takeover) */}
       <PlayerBar
         onOpenQueue={() => setQueueOpen(true)}
         onOpenNowPlaying={useCallback(() => navigate('nowplaying'), [navigate])}
+        hideMini={isNowPlaying}
       />
-      <BottomNavigation
-        active={page}
-        onChange={(p) => navigate(p as Page)}
-        onPrefetch={(p) => prefetchPage(p)}
-      />
+      {!isNowPlaying && (
+        <BottomNavigation
+          active={page}
+          onChange={(p) => navigate(p as Page)}
+          onPrefetch={(p) => prefetchPage(p)}
+        />
+      )}
       <QueueDrawer
         open={queueOpen}
         queue={queue}

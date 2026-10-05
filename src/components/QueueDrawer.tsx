@@ -426,7 +426,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                           >
                             <ArtworkImage src={t.thumbnail} alt={t.title} className="h-11 w-11 rounded-xl object-cover ring-1 ring-white/10 shrink-0" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold leading-none text-white">{t.title}</p>
+                              <p className="line-clamp-2 text-sm font-semibold leading-tight text-white">{t.title}</p>
                               <p className="truncate text-xs text-white/45">{t.author}</p>
                             </div>
                             <button
@@ -469,7 +469,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                         >
                           <ArtworkImage src={t.thumbnail} alt={t.title} className="h-12 w-12 shrink-0 rounded-xl object-cover ring-1 ring-white/10" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold leading-tight text-white">{t.title}</p>
+                            <p className="line-clamp-2 text-sm font-semibold leading-tight text-white">{t.title}</p>
                             <p className="truncate text-xs text-white/45">{t.author}</p>
                             <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-white/60">
                               <Music2 className="h-3 w-3" /> {t.duration || '—'}
@@ -667,7 +667,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                               </div>
 
                               <div className="min-w-0 flex-1">
-                                <p className="truncate text-[13px] font-semibold leading-tight text-white">{t.title}</p>
+                                <p className="line-clamp-2 text-[13px] font-semibold leading-tight text-white">{t.title}</p>
                                 <p className="truncate text-xs text-white/45">{t.author}</p>
                                 <div className="mt-1 flex flex-wrap items-center gap-1">
                                   <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-white/60">
@@ -833,7 +833,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                                     >
                                       <ArtworkImage src={t.thumbnail} alt={t.title} className="h-10 w-10 rounded-xl object-cover ring-1 ring-white/5 shrink-0 grayscale-[0.15]" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                                       <div className="min-w-0 flex-1">
-                                        <p className="truncate text-xs font-semibold text-white/80">{t.title}</p>
+                                        <p className="line-clamp-2 text-xs font-semibold text-white/80">{t.title}</p>
                                         <p className="truncate text-[11px] text-white/35">{t.author}</p>
                                       </div>
                                       <button
@@ -895,7 +895,7 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
                           <div key={`strip-${t.id}`} className="flex w-[160px] shrink-0 items-center gap-2 rounded-2xl border border-white/[0.06] bg-white/[0.04] p-2 backdrop-blur">
                             <ArtworkImage src={t.thumbnail} alt={t.title} className="h-10 w-10 rounded-xl object-cover ring-1 ring-white/10 shrink-0" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-xs font-semibold leading-tight text-white">{t.title}</p>
+                              <p className="line-clamp-2 text-xs font-semibold leading-tight text-white">{t.title}</p>
                               <p className="truncate text-[11px] text-white/40">{t.author}</p>
                             </div>
                             <button onClick={() => playerStore.addToQueue(t)} className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-black hover:bg-neutral-100 shrink-0 shadow">
@@ -950,4 +950,3 @@ export const QueueDrawer: React.FC<Props> = ({ open, queue, currentIndex, onClos
     </AnimatePresence>
   );
 };
-

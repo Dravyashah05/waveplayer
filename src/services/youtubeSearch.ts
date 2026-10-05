@@ -28,7 +28,7 @@ function pickLargestThumb(thumbs: any[] | undefined, id: string): string {
       let u = String(best.url);
       if (u.includes('/vi/')) u = u.replace(/hqdefault|mqdefault|sddefault|hq720/g, 'maxresdefault');
       // for yt3 thumbs, try upscale
-      if (u.includes('=w')) u = u.replace(/=w\d+-h\d+/, '=w800-h800').replace(/=w\d+/, '=w800');
+      if (u.includes('=w')) u = u.replace(/=w\d+-h\d+/, '=w1080-h1080').replace(/=w\d+/, '=w1080');
       return u;
     }
   }

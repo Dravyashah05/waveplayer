@@ -64,6 +64,7 @@ import { NoContent } from '../components/NoContent';
 import { toast } from '../components/Toast';
 import { ArtworkImage } from '../components/ArtworkImage';
 import { SectionHeader } from '../components/ui/SectionHeader';
+import { playPlaylist, startPlaylistTracks } from '../services/playlistPlayback';
 
 interface PlaylistPageProps {
   playlistId?: string;
@@ -320,7 +321,10 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
     setRadioLoading(true);
     fetchRadio(tracks[0], 12)
       .then((list) => {
-        if (!cancelled) setRadioTracks(list.filter((t) => !tracks.some((x) => x.id === t.id)).slice(0, 8));
+        if (!cancelled) {
+          const playlistTrackIds = new Set(tracks.map((track) => track.id));
+          setRadioTracks(list.filter((track) => !playlistTrackIds.has(track.id)).slice(0, 8));
+        }
       })
       .catch(() => {
         if (!cancelled) setRadioTracks([]);
@@ -397,15 +401,31 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
     return null;
   }, [localPl, playlist]);
 
+  const playlistContext: Playlist | null = playlist || (localPl ? {
+    playlistId: `local:${localPl.id}`,
+    name: localPl.title,
+    author: 'Wave Player',
+    thumbnails: localPl.thumbnail ? [{ url: localPl.thumbnail, width: 0, height: 0 }] : [],
+    type: 'PLAYLIST',
+  } : null);
+
+  const handlePlayPlaylist = (startIndex = 0, queueTracks = tracks) => {
+    if (!playlistContext) return;
+    try {
+      startPlaylistTracks(playlistContext, queueTracks, startIndex);
+    } catch {
+      toast.info('This playlist has no playable tracks.');
+    }
+  };
+
   const handlePlayAll = () => {
-    if (!visibleTracks.length) return;
-    onPlay(visibleTracks[0], visibleTracks);
+    handlePlayPlaylist(0);
   };
 
   const handleShuffle = () => {
     if (!visibleTracks.length) return;
-    const shuffled = [...visibleTracks].sort(() => Math.random() - 0.5);
-    playerStore.setQueue(shuffled, 0);
+    const shuffled = [...tracks].sort(() => Math.random() - 0.5);
+    handlePlayPlaylist(0, shuffled);
     if (!playerStore.shuffle) playerStore.toggleShuffle();
   };
 
@@ -736,8 +756,7 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
               <motion.div
                 key={p.playlistId}
                 whileHover={{ y: -4 }}
-                onClick={() => onNavigate?.('playlist', p.playlistId)}
-                className="group relative cursor-pointer lg-card p-3"
+                className="group relative lg-card p-3"
               >
                 <div className="relative aspect-square w-full overflow-hidden rounded-[14px] bg-[#141416] ring-1 ring-white/10">
                   <ArtworkImage
@@ -747,16 +766,23 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
                     className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
                     referrerPolicy="no-referrer"
                   />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <button type="button" aria-label={`Play playlist ${p.name}`} onClick={() => {
+                    toast.info(`Loading ${p.name}…`);
+                    void playPlaylist(p).catch((error) => toast.error(
+                      (error as { code?: string })?.code === 'NO_PLAYABLE_TRACKS'
+                        ? 'This playlist has no playable tracks.'
+                        : 'Unable to load this playlist.',
+                    ));
+                  }} className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100">
                     <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-black shadow-lg">
                       <Play className="h-5 w-5 fill-current ml-0.5" />
                     </span>
-                  </div>
+                  </button>
                 </div>
                 <div className="mt-3 min-w-0">
-                  <p className="truncate text-[13.5px] font-bold text-white group-hover:text-amber-300 transition-colors">
+                  <button type="button" onClick={() => onNavigate?.('playlist', p.playlistId)} className="block w-full truncate text-left text-[13.5px] font-bold text-white group-hover:text-amber-300 transition-colors">
                     {p.name}
-                  </p>
+                  </button>
                   <p className="truncate text-[12px] text-[#86868b] mt-0.5">
                     {p.author || 'JioSaavn Editorial'}
                   </p>
@@ -1153,7 +1179,7 @@ export const PlaylistPage: React.FC<PlaylistPageProps> = ({ playlistId, onPlay, 
                         track={t}
                         index={idx}
                         isActive={isTrackActive}
-                        onPlay={() => onPlay(t, visibleTracks)}
+                        onPlay={() => handlePlayPlaylist(Math.max(0, tracks.findIndex((track) => track.id === t.id)))}
                         onNavigate={onNavigate}
                         selectable={selectMode}
                         selected={selected.has(t.id)}

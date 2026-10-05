@@ -41,6 +41,7 @@ import {
   TopResultItem,
 } from '../services/searchEngine';
 import { getLocalPlaylists } from '../services/libraryStore';
+import { playlistRouteId } from '../services/playlistModel';
 import { getSaavnBrowseModules } from '../services/saavnApi';
 import { fetchRadio } from '../services/recommendationApi';
 import { startRadioAndPlay } from '../services/radioEngine';
@@ -101,10 +102,11 @@ const POPULAR_SEARCH_CHIPS = [
 
 export const SearchPage: React.FC<{
   onPlay: (t: Track, list?: Track[]) => void;
+  onPlayPlaylist?: (playlist: Playlist) => void;
   initialQuery?: string;
   onQueryChange?: (q: string) => void;
   onNavigate?: (page: string, param?: string) => void;
-}> = ({ onPlay, initialQuery = '', onQueryChange, onNavigate }) => {
+}> = ({ onPlay, onPlayPlaylist, initialQuery = '', onQueryChange, onNavigate }) => {
   const [query, setQuery] = useState(initialQuery);
   const [activeFilter, setActiveFilter] = useState<SearchFilter>('all');
   const [results, setResults] = useState<UnifiedSearchResults | null>(null);
@@ -591,7 +593,7 @@ export const SearchPage: React.FC<{
                           </div>
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs sm:text-[13px] font-bold text-white">
+                          <p className="line-clamp-2 text-xs sm:text-[13px] font-bold text-white">
                             {track.title}
                           </p>
                           <p className="truncate text-[11px] text-[#8e8e93] font-medium">
@@ -794,6 +796,16 @@ export const SearchPage: React.FC<{
                           <div className="flex items-center gap-2 pt-4">
                             <button
                               type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onPlayPlaylist?.(results.topResult!.item as Playlist);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-full bg-white px-5 py-2 text-xs font-bold text-black hover:bg-white/90 shadow-md active:scale-95 transition-all"
+                            >
+                              <Play className="h-3.5 w-3.5 fill-current" /> Play Playlist
+                            </button>
+                            <button
+                              type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleStartRadio(results.topResult!.item as SearchArtist);
@@ -839,7 +851,7 @@ export const SearchPage: React.FC<{
                               <span className="rounded-full bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-0.5 text-[10px] font-black text-cyan-300 uppercase tracking-wider">
                                 Song
                               </span>
-                              <h4 className="text-[20px] sm:text-[22px] font-black text-white tracking-tight mt-1 truncate">
+                              <h4 className="mt-1 line-clamp-2 text-[20px] sm:text-[22px] font-black text-white tracking-tight">
                                 {(results.topResult.item as Track).title}
                               </h4>
                               <p className="text-xs text-[#8e8e93] font-medium mt-0.5 truncate">
@@ -923,7 +935,7 @@ export const SearchPage: React.FC<{
                         <div
                           onClick={() => {
                             const pl = results.topResult!.item as Playlist;
-                            if (pl.playlistId && onNavigate) onNavigate('playlist', pl.playlistId);
+                            if (pl.playlistId && onNavigate) onNavigate('playlist', playlistRouteId(pl));
                           }}
                           className="group relative cursor-pointer rounded-[28px] border border-white/10 bg-white/[0.04] hover:bg-white/[0.08] p-6 transition-all shadow-[0_8px_30px_rgba(0,0,0,0.4)] backdrop-blur-md flex flex-col justify-between h-[240px]"
                         >
@@ -954,9 +966,10 @@ export const SearchPage: React.FC<{
                           <div className="flex items-center gap-2 pt-4">
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={(event) => {
+                                event.stopPropagation();
                                 const pl = results.topResult!.item as Playlist;
-                                if (pl.playlistId && onNavigate) onNavigate('playlist', pl.playlistId);
+                                if (pl.playlistId && onNavigate) onNavigate('playlist', playlistRouteId(pl));
                               }}
                               className="inline-flex items-center gap-1.5 rounded-full bg-white px-5 py-2 text-xs font-bold text-black hover:bg-white/90 shadow-md active:scale-95 transition-all"
                             >
@@ -1106,7 +1119,7 @@ export const SearchPage: React.FC<{
                         <div
                           key={playlist.playlistId}
                           onClick={() => {
-                            if (playlist.playlistId && onNavigate) onNavigate('playlist', playlist.playlistId);
+                            if (playlist.playlistId && onNavigate) onNavigate('playlist', playlistRouteId(playlist));
                             else handleApplySearch(playlist.name);
                           }}
                           className="group cursor-pointer min-w-[145px] w-[145px] sm:min-w-[165px] sm:w-[165px] shrink-0 rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all"
@@ -1118,11 +1131,11 @@ export const SearchPage: React.FC<{
                               loading="lazy"
                               className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500"
                             />
-                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                            <button type="button" aria-label={`Play playlist ${playlist.name}`} onClick={(event) => { event.stopPropagation(); onPlayPlaylist?.(playlist); }} className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity">
                               <span className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
                                 <Play className="h-4 w-4 fill-current ml-0.5" />
                               </span>
-                            </div>
+                            </button>
                           </div>
                           <p className="truncate text-xs sm:text-[13.5px] font-bold text-white mt-2 group-hover:text-amber-300 transition-colors">
                             {playlist.name}
@@ -1290,7 +1303,7 @@ export const SearchPage: React.FC<{
                     <div
                       key={playlist.playlistId}
                       onClick={() => {
-                        if (playlist.playlistId && onNavigate) onNavigate('playlist', playlist.playlistId);
+                        if (playlist.playlistId && onNavigate) onNavigate('playlist', playlistRouteId(playlist));
                         else handleApplySearch(playlist.name);
                       }}
                       className="group cursor-pointer rounded-[22px] bg-white/[0.03] border border-white/10 p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all"
@@ -1302,11 +1315,11 @@ export const SearchPage: React.FC<{
                           loading="lazy"
                           className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500"
                         />
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                        <button type="button" aria-label={`Play playlist ${playlist.name}`} onClick={(event) => { event.stopPropagation(); onPlayPlaylist?.(playlist); }} className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity">
                           <span className="h-10 w-10 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
                             <Play className="h-4 w-4 fill-current ml-0.5" />
                           </span>
-                        </div>
+                        </button>
                       </div>
                       <p className="truncate text-xs sm:text-[13.5px] font-bold text-white mt-2 group-hover:text-amber-300 transition-colors">
                         {playlist.name}

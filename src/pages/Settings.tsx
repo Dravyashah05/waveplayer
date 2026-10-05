@@ -599,6 +599,10 @@ const SourcesCard: React.FC = () => {
 const LocalFilesCard: React.FC = () => {
   const [files, setFiles] = useState<LocalFileMeta[]>([]);
   const [busy, setBusy] = useState(false);
+  const activeImportCount = downloadItems().reduce(
+    (count, item) => count + (item.state === 'downloading' || item.state === 'queued' ? 1 : 0),
+    0,
+  );
   const reload = () => {
     listLocalFiles().then(setFiles).catch(() => setFiles([]));
   };
@@ -629,9 +633,9 @@ const LocalFilesCard: React.FC = () => {
         </label>
       </div>
       <div className="divide-y divide-white/5">
-        {downloadItems().filter((d) => d.state === 'downloading' || d.state === 'queued').length > 0 && (
+        {activeImportCount > 0 && (
           <div className="px-4 py-2.5">
-            <p className="text-[11px] text-white/50">Importing {downloadItems().filter((d) => d.state === 'downloading' || d.state === 'queued').length} file(s)…</p>
+            <p className="text-[11px] text-white/50">Importing {activeImportCount} file(s)…</p>
           </div>
         )}
         {files.length === 0 ? (
@@ -665,7 +669,7 @@ const LocalFileRow: React.FC<{ meta: LocalFileMeta; onChange: () => void }> = ({
   return (
     <div className="flex items-center gap-3 px-4 py-2.5">
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-medium text-white">{meta.title}</p>
+        <p className="line-clamp-2 text-[13px] font-medium text-white">{meta.title}</p>
         <p className="truncate text-[11px] text-white/40">{meta.artist}{meta.durationSeconds ? ` • ${Math.floor(meta.durationSeconds / 60)}:${String(meta.durationSeconds % 60).padStart(2, '0')}` : ''}</p>
       </div>
       <button type="button" onClick={() => void play()} className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black" aria-label={`Play ${meta.title}`}>

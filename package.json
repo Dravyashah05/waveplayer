@@ -28,6 +28,7 @@
     "test:sources": "tsx --test src/services/audioSourceManager.test.ts",
     "test:offline": "tsx --test src/services/offlineDownloads.test.ts",
     "test:gateway": "tsx --test server/ytmusicPython.test.ts",
+    "test:playlist": "tsx --test src/services/playlistPlayback.test.ts",
     "test:py": "python -m unittest discover -s services/ytmusic-python -t services/ytmusic-python"
   },
   "dependencies": {

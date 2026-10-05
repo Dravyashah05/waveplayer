@@ -131,7 +131,7 @@ export const TrackRail: React.FC<TrackRailProps> = ({
               </span>
               <span className="block min-w-0 pt-2">
                 <span
-                  className={`block truncate text-[13px] sm:text-[13.5px] font-bold leading-tight ${
+                  className={`block line-clamp-2 text-[13px] sm:text-[13.5px] font-bold leading-tight ${
                     isActive ? 'text-white' : 'text-white/95 group-hover:text-white transition-colors'
                   }`}
                 >

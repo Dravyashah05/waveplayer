@@ -54,7 +54,7 @@ export interface Playlist {
   type: 'PLAYLIST';
   description?: string;
   language?: string;
-  source?: 'saavn' | 'ytmusic';
+  source?: 'saavn' | 'ytmusic' | 'youtube';
   tracks?: Track[];
 }
 
@@ -81,6 +81,19 @@ export interface SearchArtist {
   role?: string;
   description?: string;
   source?: 'saavn' | 'ytmusic';
+}
+
+/** Provider search results remain separate models and are never queue items. */
+export type MediaItem = Track | Playlist | Album | SearchArtist;
+
+export function isPlaylist(item: MediaItem): item is Playlist {
+  return item.type === 'PLAYLIST';
+}
+
+export function isTrack(item: MediaItem): item is Track {
+  return (item.type === undefined || item.type === 'SONG' || item.type === 'VIDEO') &&
+    'id' in item && typeof item.id === 'string' &&
+    'durationSeconds' in item && typeof item.durationSeconds === 'number';
 }
 
 export type SearchFilter = 'all' | 'songs' | 'videos' | 'albums' | 'playlists' | 'artists';

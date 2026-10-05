@@ -568,7 +568,7 @@ export const YTMusicLibraryPanel: React.FC<YTMusicLibraryPanelProps> = ({
                     </span>
                   </div>
                   <div className="mt-2.5 min-w-0">
-                    <p className="truncate text-[13.5px] font-bold text-white">{pl.name}</p>
+                    <p className="line-clamp-2 text-[13.5px] font-bold text-white">{pl.name}</p>
                     <p className="truncate text-xs text-white/50 mt-0.5">
                       {typeof pl.videoCount === 'number' ? `${pl.videoCount} tracks` : pl.author}
                     </p>
@@ -697,7 +697,7 @@ export const YTMusicLibraryPanel: React.FC<YTMusicLibraryPanelProps> = ({
                       </span>
                     </div>
                     <div className="mt-2.5 min-w-0">
-                      <p className="truncate text-[13.5px] font-bold text-white">{album.name}</p>
+                      <p className="line-clamp-2 text-[13.5px] font-bold text-white">{album.name}</p>
                       <p className="truncate text-xs text-white/50 mt-0.5">
                         {album.artist.name} {album.year ? `• ${album.year}` : ''}
                       </p>
@@ -768,7 +768,7 @@ export const YTMusicLibraryPanel: React.FC<YTMusicLibraryPanelProps> = ({
                       )}
                     </div>
                     <div className="mt-3 min-w-0 w-full">
-                      <p className="truncate text-[14px] font-bold text-white">{artist.name}</p>
+                      <p className="line-clamp-2 text-[14px] font-bold text-white">{artist.name}</p>
                       <span className="mt-1.5 inline-block rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-bold text-red-300 border border-red-500/20">
                         YouTube Music
                       </span>

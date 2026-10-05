@@ -26,6 +26,7 @@ import {
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Track, Album, Playlist, SearchArtist } from '../types';
 import { playerStore } from '../services/playerStore';
+import { playlistRouteId } from '../services/playlistModel';
 import { playerEngine, requestResumePosition, usePlayerEngine } from '../services/playerEngine';
 import { fetchRadio, fetchSimilar } from '../services/recommendationApi';
 import { startRadioAndPlay } from '../services/radioEngine';
@@ -127,10 +128,10 @@ const RailHeader: React.FC<{
 
 export const HomePage: React.FC<{
   onPlay: (t: Track, list?: Track[]) => void;
-  onPlayPlaylist?: (id: string) => void;
+  onPlayPlaylist?: (playlist: Playlist) => void;
   onNavigate?: (page: string, param?: string) => void;
   history: Track[];
-}> = ({ onPlay, onNavigate, history }) => {
+}> = ({ onPlay, onPlayPlaylist, onNavigate, history }) => {
   const { user } = useGoogleAccount();
   const { greeting, caption } = useMemo(() => getDynamicGreeting(user?.name), [user?.name]);
   const reduceMotion = useReducedMotion();
@@ -382,7 +383,7 @@ export const HomePage: React.FC<{
                       {/* Title & Artist */}
                       <div className="min-w-0 flex-1 py-0.5">
                         <p
-                          className={`truncate text-[13.5px] sm:text-[14px] font-bold leading-tight ${
+                          className={`line-clamp-2 text-[13.5px] sm:text-[14px] font-bold leading-tight ${
                             isActive ? 'text-white' : 'text-white/95 group-hover:text-white'
                           }`}
                         >
@@ -475,7 +476,7 @@ export const HomePage: React.FC<{
                         </div>
                       </div>
                       <div className="pt-2">
-                        <p className="truncate text-[13px] sm:text-[13.5px] font-bold text-white leading-tight group-hover:text-amber-300 transition-colors">
+                        <p className="line-clamp-2 text-[13px] sm:text-[13.5px] font-bold text-white leading-tight group-hover:text-amber-300 transition-colors">
                           {track.title}
                         </p>
                         <p className="truncate text-xs font-medium text-[#8e8e93] mt-0.5">
@@ -875,7 +876,6 @@ export const HomePage: React.FC<{
                 {topPlaylists.slice(0, 6).map((pl) => (
                   <div
                     key={pl.playlistId}
-                    onClick={() => onNavigate?.('playlist', pl.playlistId)}
                     className="group relative cursor-pointer rounded-[22px] border border-white/10 bg-white/[0.03] p-3 hover:bg-white/[0.07] hover:border-white/20 transition-all shadow-sm"
                   >
                     <div className="relative aspect-square w-full overflow-hidden rounded-[16px] bg-[#141416] ring-1 ring-white/10">
@@ -885,16 +885,16 @@ export const HomePage: React.FC<{
                         loading="lazy"
                         className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
                       />
-                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <button type="button" aria-label={`Play playlist ${pl.name}`} onClick={() => onPlayPlaylist?.(pl)} className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100">
                         <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-black shadow-lg">
                           <Play className="h-5 w-5 fill-current ml-0.5" />
                         </span>
-                      </div>
+                      </button>
                     </div>
                     <div className="mt-2.5 min-w-0">
-                      <p className="truncate text-[13.5px] font-bold text-white group-hover:text-amber-300 transition-colors">
+                      <button type="button" onClick={() => onNavigate?.('playlist', playlistRouteId(pl))} className="block w-full truncate text-left text-[13.5px] font-bold text-white group-hover:text-amber-300 transition-colors">
                         {pl.name}
-                      </p>
+                      </button>
                       <p className="truncate text-xs text-[#8e8e93] mt-0.5">
                         {pl.author || 'Curated Editorial'}
                       </p>

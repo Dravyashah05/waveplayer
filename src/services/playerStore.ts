@@ -41,7 +41,10 @@ function load<T>(key: string, fallback: T): T {
 }
 
 function isTrackLike(t: unknown): t is Track {
-  return !!t && typeof t === 'object' && typeof (t as Track).id === 'string' && !!(t as Track).id;
+  if (!t || typeof t !== 'object') return false;
+  const item = t as Partial<Track> & { playlistId?: unknown };
+  const type = (t as { type?: unknown }).type;
+  return typeof item.id === 'string' && !!item.id.trim() && type !== 'PLAYLIST' && typeof item.playlistId !== 'string';
 }
 
 function loadTracks(key: string): Track[] {

@@ -128,7 +128,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
           initial={{ opacity: 0, scale: 0.92 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-          className="relative h-11 w-11 sm:h-12 sm:w-12 rounded-[16px] overflow-hidden bg-[#18181b] ring-1 ring-white/10 shrink-0 shadow-[0_4px_16px_rgba(0,0,0,0.5)]"
+          className="relative h-12 w-12 sm:h-14 sm:w-14 rounded-[16px] overflow-hidden bg-[#18181b] ring-1 ring-white/10 shrink-0 shadow-[0_4px_16px_rgba(0,0,0,0.5)]"
         >
           <ArtworkImage
             src={track.thumbnail}
@@ -146,10 +146,10 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
           <div className="min-w-0">
             <MarqueeText
               text={track.title}
-              className="text-[13.5px] sm:text-[14px] font-bold text-white leading-tight tracking-[-0.01em]"
+              className="text-[14px] sm:text-[15px] font-bold text-white leading-tight tracking-[-0.01em]"
             />
           </div>
-          <p className="truncate text-[11.5px] sm:text-[12px] font-medium text-white/60 leading-tight mt-0.5">
+          <p className="truncate text-[12px] sm:text-[13px] font-medium text-white/60 leading-tight mt-0.5">
             {track.author}
             <span className="text-white/30"> • {track.duration || fmt(safeDuration)}</span>
           </p>
@@ -176,20 +176,6 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
             }`}
           >
             <Heart className={`h-4 w-4 ${isFav ? 'fill-current' : ''}`} />
-          </button>
-
-          {/* Skip Back (desktop / wide mobile) */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onPrev();
-            }}
-            aria-label="Previous track"
-            title="Previous"
-            className="hidden sm:flex touch-target h-9 w-9 rounded-full items-center justify-center text-white/70 hover:text-white hover:bg-white/10 active:scale-90 transition-all"
-          >
-            <SkipBack className="h-4 w-4 fill-current" />
           </button>
 
           {/* Play / Pause Toggle Button */}

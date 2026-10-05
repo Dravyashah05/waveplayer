@@ -201,7 +201,7 @@ export const SongContextMenu: React.FC<SongContextMenuProps> = ({
               className="h-12 w-12 rounded-xl object-cover ring-1 ring-white/10 shadow-sm shrink-0"
             />
             <div className="min-w-0 flex-1">
-              <h4 className="truncate text-sm font-bold text-white tracking-tight leading-tight">
+              <h4 className="line-clamp-2 text-sm font-bold text-white tracking-tight leading-tight">
                 {track.title}
               </h4>
               <p className="truncate text-xs text-white/50 mt-0.5 font-medium">

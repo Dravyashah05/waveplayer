@@ -106,7 +106,7 @@ function pickLargestThumb(thumbs: any[] | undefined, fallbackId?: string): strin
       let url = String(best.url);
       // If it's a Googleusercontent URL with =w<number>, upgrade to w800 for high quality
       if (url.includes('=w')) {
-        url = url.replace(/=w\d+-h\d+/, '=w800-h800').replace(/=w\d+/, '=w800');
+        url = url.replace(/=w\d+-h\d+/, '=w1080-h1080').replace(/=w\d+/, '=w1080');
         // Ensure high quality params
         if (!url.includes('-l90')) url += '';
       }
@@ -148,6 +148,7 @@ function toPlaylist(item: any): Playlist | null {
     author: String(item.artist?.name || 'YouTube'),
     thumbnails: Array.isArray(item.thumbnails) ? item.thumbnails : [],
     type: 'PLAYLIST',
+    source: 'ytmusic',
   };
 }
 

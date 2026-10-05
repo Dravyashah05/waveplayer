@@ -175,7 +175,7 @@ export const SongRow: React.FC<SongRowProps> = ({
       <div className="min-w-0 flex-1 py-0.5">
         <div className="flex items-center gap-1.5 min-w-0">
           <p
-            className={`truncate text-[13.5px] sm:text-[14px] font-semibold tracking-[-0.01em] leading-tight ${
+            className={`line-clamp-2 text-[13.5px] sm:text-[14px] font-semibold tracking-[-0.01em] leading-tight ${
               isActive ? 'text-white font-bold' : 'text-white/95 group-hover:text-white'
             }`}
           >

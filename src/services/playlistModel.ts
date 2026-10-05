@@ -15,6 +15,14 @@ import { googleAccountStore } from '../hooks/useGoogleAccount';
 
 export type UnifiedPlaylistSource = 'wave' | 'youtube' | 'ytmusic' | 'saavn';
 
+/** Route reference keeps playlist detail loaders on the correct provider. */
+export function playlistRouteId(playlist: Pick<Playlist, 'playlistId' | 'source'>): string {
+  const id = String(playlist.playlistId || '');
+  if (playlist.source === 'ytmusic' && !id.startsWith('ytmusic:')) return `ytmusic:${id}`;
+  if (playlist.source === 'youtube' && !id.startsWith('youtube:')) return `youtube:${id}`;
+  return id;
+}
+
 export interface UnifiedPlaylist {
   /** Namespaced id: `wave:<id>`, `youtube:<id>`, `ytmusic:<id>`, or raw Saavn id. */
   id: string;

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArtworkImage } from '../components/ArtworkImage';
+import { MarqueeText } from '../components/MarqueeText';
 import { motion, useReducedMotion } from 'motion/react';
 import {
   ArrowLeft,
@@ -12,25 +13,18 @@ import {
   Mic2,
   MicVocal,
   MoreVertical,
-  Pause,
-  Play,
   Radio,
-  Repeat,
-  Repeat1,
   Share2,
-  Shuffle,
-  SkipBack,
-  SkipForward,
   Volume2,
-  VolumeX,
 } from 'lucide-react';
+import { PlayerControls } from '../components/PlayerControls';
 import type { Track } from '../types';
 import { playerStore } from '../services/playerStore';
 import { playerEngine, usePlayerEngine } from '../services/playerEngine';
 import { settingsStore } from '../services/settingsStore';
 import { startRadioAndPlay } from '../services/radioEngine';
 import { DEFAULT_PALETTE, extractPalette, type ArtworkPalette } from '../services/artworkPalette';
-import { describeSource, radioReason } from '../services/queueMeta';
+import { radioReason } from '../services/queueMeta';
 import { useLyrics } from '../hooks/useLyrics';
 import { LyricsView } from '../components/LyricsView';
 import { AddToPlaylistModal } from '../components/AddToPlaylistModal';
@@ -43,13 +37,6 @@ interface Props {
 }
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
-
-function fmt(s: number): string {
-  if (!Number.isFinite(s) || s < 0) s = 0;
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  return `${m}:${String(sec).padStart(2, '0')}`;
-}
 
 function sourceName(t: Track): string | null {
   if (t.source === 'saavn') return 'JioSaavn';
@@ -65,10 +52,7 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
   const reduceMotion = useReducedMotion();
   const [track, setTrack] = useState<Track | null>(() => playerStore.current());
   const [isFav, setIsFav] = useState(() => (playerStore.current() ? playerStore.isFav(playerStore.current()!.id) : false));
-  const [shuffle, setShuffle] = useState(() => playerStore.shuffle);
-  const [repeat, setRepeat] = useState(() => playerStore.repeat);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [speedOpen, setSpeedOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
   const [palette, setPalette] = useState<ArtworkPalette>(DEFAULT_PALETTE);
@@ -78,8 +62,6 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
       const cur = playerStore.current();
       setTrack(cur);
       setIsFav(cur ? playerStore.isFav(cur.id) : false);
-      setShuffle(playerStore.shuffle);
-      setRepeat(playerStore.repeat);
     });
     return () => {
       unsub();
@@ -109,12 +91,9 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
     const idx = playerStore.currentIndex();
     return idx >= 0 ? playerStore.metaForIndex(idx) : null;
   }, [track?.id]);
-  const provenance = describeSource(meta);
   const reason = radioReason(meta);
 
   const duration = eng.duration > 1 ? eng.duration : track?.durationSeconds && track.durationSeconds > 0 ? track.durationSeconds : 180;
-  const seekMax = Math.max(1, Math.round(duration));
-  const seekValue = Math.min(Math.round(eng.progress), seekMax);
 
   if (!track) {
     return (
@@ -151,7 +130,6 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
     }
   };
 
-  const repeatLabel = repeat === 'one' ? 'Repeat one' : repeat === 'all' ? 'Repeat queue' : 'Repeat off';
   const src = sourceName(track);
 
   return (
@@ -159,36 +137,117 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
       initial={reduceMotion ? undefined : { opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-      className="relative overflow-hidden rounded-[28px] border border-white/10 p-5 sm:p-8"
-      style={{ background: `linear-gradient(160deg, ${palette.surface}, rgba(0,0,0,0.6) 70%)` }}
+      className="relative min-h-[100dvh] overflow-hidden"
     >
-      <div className="pointer-events-none absolute inset-0" aria-hidden="true" style={{ background: `radial-gradient(60% 45% at 20% 0%, ${palette.surface}, transparent)` }} />
+      {/* Fullscreen album-art background — blurred + darkened so content stays legible */}
+      <div className="absolute inset-0 bg-[#0b0b0d]" aria-hidden="true">
+        <ArtworkImage
+          src={track.thumbnail}
+          alt=""
+          className="h-full w-full scale-105 object-cover blur-[3px]"
+          fetchPriority="high"
+          decoding="async"
+          referrerPolicy="no-referrer"
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/60 to-black/90" />
+        <div className="absolute inset-0 bg-black/30" />
+      </div>
+      <div className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-3xl flex-col px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-8">
 
-      <div className="relative mb-4 sm:mb-6 flex items-center justify-between">
+      <header className="flex items-center justify-between gap-3">
         <button
           type="button"
           onClick={() => (onBack ? onBack() : window.history.back())}
           aria-label="Go back"
-          className="touch-target inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs font-semibold text-white/90 hover:bg-white/[0.14] active:scale-95 transition-all shadow-sm"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.07] text-white/90 backdrop-blur-xl transition-all hover:bg-white hover:text-black active:scale-95"
         >
-          <ArrowLeft className="h-4 w-4" /> Back
+          <ArrowLeft className="h-5 w-5" />
         </button>
-        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/40">Now Playing</p>
-        <button
-          type="button"
-          onClick={onOpenQueue}
-          aria-label="Open queue"
-          title="Open queue"
-          className="touch-target inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs font-semibold text-white/90 hover:bg-white/[0.14] active:scale-95 transition-all shadow-sm"
-        >
-          <ListMusic className="h-4 w-4" /> Queue
-        </button>
-      </div>
+        <p className="flex min-w-0 items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.3em] text-white/50">
+          <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400" aria-hidden /> Now Playing
+        </p>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onOpenQueue}
+            aria-label="Open queue"
+            title="Open queue"
+            className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.07] text-white/90 backdrop-blur-xl transition-all hover:bg-white hover:text-black active:scale-95"
+          >
+            <ListMusic className="h-5 w-5" />
+          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setMoreOpen((v) => !v)}
+              aria-label="More track actions"
+              aria-expanded={moreOpen}
+              className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.07] text-white/90 backdrop-blur-xl transition-all hover:bg-white hover:text-black active:scale-95"
+            >
+              <MoreVertical className="h-5 w-5" />
+            </button>
+            {moreOpen && (
+              <div role="menu" aria-label="More actions" className="absolute right-0 top-[calc(100%+8px)] z-30 w-56 overflow-hidden rounded-2xl border border-white/10 bg-[#141416] p-1.5 shadow-xl">
+                {src && (
+                  <>
+                    <p className="px-3 py-2 text-[11px] font-semibold text-white/45">Source • {src}</p>
+                    <div className="mx-1 mb-1 h-px bg-white/[0.06]" />
+                  </>
+                )}
+                <MenuRow icon={<Share2 className="h-4 w-4" />} label="Share" onClick={() => { setMoreOpen(false); void handleShare(); }} />
+                {onNavigate && (
+                  <MenuRow icon={<Mic2 className="h-4 w-4" />} label="Open artist" onClick={() => { setMoreOpen(false); onNavigate('artist', track.author); }} />
+                )}
+                {onNavigate && track.albumId && (
+                  <MenuRow icon={<Disc3 className="h-4 w-4" />} label="Open album" onClick={() => { setMoreOpen(false); onNavigate('album', track.albumId!); }} />
+                )}
+                <div className="my-1 h-px bg-white/[0.06]" />
+                <p className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-white/35">Speed (audio only)</p>
+                <div className="grid grid-cols-3 gap-1 px-1.5 pb-1.5">
+                  {SPEEDS.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => {
+                        playerEngine.setPlaybackRate(s);
+                        setMoreOpen(false);
+                      }}
+                      aria-pressed={eng.playbackRate === s}
+                      className={`rounded-lg px-2 py-1.5 text-xs font-bold ${eng.playbackRate === s ? 'bg-white text-black' : 'bg-white/[0.06] text-white/70 hover:bg-white/15'}`}
+                    >
+                      {s}x
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 px-3 py-2 md:hidden">
+                  <Volume2 className="h-4 w-4 shrink-0 text-white/60" />
+                  <label className="sr-only" htmlFor="np-volume-m">Volume</label>
+                  <input
+                    id="np-volume-m"
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={eng.muted ? 0 : eng.volume}
+                    onChange={(e) => playerEngine.setVolume(Number(e.target.value))}
+                    className="w-full accent-white"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
 
-      <div className="relative grid gap-6 md:grid-cols-[minmax(0,380px)_minmax(0,1fr)] md:gap-8">
-        {/* Artwork + core controls */}
-        <div>
-          <div className="mx-auto aspect-square w-full max-w-[380px] overflow-hidden rounded-[24px] bg-[#161619] shadow-[0_24px_64px_rgba(0,0,0,0.6)] ring-1 ring-white/15">
+      <main className="mx-auto flex w-full max-w-[560px] flex-1 flex-col items-center justify-center py-6 text-center">
+        <motion.div
+          animate={reduceMotion ? undefined : { scale: eng.isPlaying ? 1 : 0.96 }}
+          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          className="relative w-[min(64vw,300px)] sm:w-[320px]"
+        >
+          <div aria-hidden="true" className="absolute -inset-4 overflow-hidden rounded-[36px] opacity-45 blur-2xl">
+            <ArtworkImage src={track.thumbnail} alt="" className="h-full w-full scale-110 object-cover" referrerPolicy="no-referrer" />
+          </div>
+          <div className="relative aspect-square overflow-hidden rounded-[28px] bg-white/5 shadow-[0_32px_80px_rgba(0,0,0,0.65)] ring-1 ring-white/20">
             <ArtworkImage
               src={track.thumbnail}
               alt={`${track.title} artwork`}
@@ -197,288 +256,100 @@ export const NowPlayingPage: React.FC<Props> = ({ onNavigate, onBack, onOpenQueu
               decoding="async"
               referrerPolicy="no-referrer"
             />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-white/[0.06]" />
           </div>
+        </motion.div>
 
-          <div className="mt-4 text-center md:text-left">
-            <h1 className="text-[22px] font-black leading-tight tracking-[-0.02em] text-white">{track.title}</h1>
-            <p className="mt-1 truncate text-[14px] font-medium text-white/60">
-              {track.author}
-              {track.albumName ? ` • ${track.albumName}` : ''}
-            </p>
-            <p className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5 text-[11px] md:justify-start" aria-label="Track provenance">
-              {src && (
-                <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-0.5 font-semibold text-white/60">{src}</span>
-              )}
-              {provenance && (
-                <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-0.5 font-semibold text-white/60">{provenance}</span>
-              )}
-              {(meta?.addedBy === 'radio' || meta?.addedBy === 'autoplay') && (
-                <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-0.5 font-bold text-white/70" title={reason || undefined}>
-                  {meta.addedBy === 'autoplay' ? 'Autoplay' : 'Radio'}{reason && reason !== 'Radio' ? ` • ${reason}` : ''}
-                </span>
-              )}
-            </p>
-          </div>
-
-          {/* Progress */}
-          <div className="mt-4">
-            <label className="sr-only" htmlFor="np-seek">Seek</label>
-            <input
-              id="np-seek"
-              type="range"
-              min={0}
-              max={seekMax}
-              value={seekValue}
-              onChange={(e) => playerEngine.seek(Number(e.target.value))}
-              className="w-full accent-white"
-              aria-valuetext={`${fmt(eng.progress)} of ${fmt(duration)}`}
+        <div className="mt-5 w-full [text-shadow:0_2px_18px_rgba(0,0,0,0.9)]">
+          <h1 className="mx-auto min-w-0 max-w-full overflow-hidden whitespace-nowrap text-[24px] font-black leading-[1.05] tracking-[-0.03em] text-white drop-shadow-[0_2px_16px_rgba(0,0,0,0.9)] sm:text-[28px]">
+            <MarqueeText
+              text={track.title}
+              className="text-[24px] font-black leading-[1.05] tracking-[-0.03em] text-white sm:text-[28px]"
             />
-            <div className="mt-1 flex justify-between text-[11px] font-medium tabular-nums text-white/45">
-              <span>{fmt(eng.progress)}</span>
-              <span>{fmt(duration)}</span>
-            </div>
-          </div>
-
-          {/* Transport */}
-          <div className="mt-3 flex items-center justify-center gap-3 sm:gap-4" role="group" aria-label="Playback controls">
-            <button
-              type="button"
-              onClick={() => playerStore.toggleShuffle()}
-              aria-label={shuffle ? 'Shuffle on' : 'Shuffle off'}
-              aria-pressed={shuffle}
-              title="Shuffle"
-              className={`touch-target flex h-10 w-10 items-center justify-center rounded-full transition-all active:scale-95 ${shuffle ? 'bg-white text-black shadow-md' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
-            >
-              <Shuffle className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => playerEngine.prev()}
-              aria-label="Previous track"
-              title="Previous (P)"
-              className="touch-target flex h-12 w-12 items-center justify-center rounded-full text-white hover:bg-white/10 active:scale-90 transition-all"
-            >
-              <SkipBack className="h-5 w-5 fill-current" />
-            </button>
-            <button
-              type="button"
-              onClick={() => playerEngine.toggle()}
-              aria-label={eng.isPlaying ? 'Pause' : 'Play'}
-              title="Play/Pause (Space)"
-              className="touch-target-lg flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full text-black shadow-[0_8px_24px_rgba(0,0,0,0.5)] active:scale-95 hover:scale-105 transition-all"
-              style={{ background: palette.primary }}
-            >
-              {eng.isBuffering ? (
-                <Loader2 className="h-6 w-6 sm:h-7 sm:w-7 animate-spin" />
-              ) : eng.isPlaying ? (
-                <Pause className="h-6 w-6 sm:h-7 sm:w-7 fill-current" />
-              ) : (
-                <Play className="ml-0.5 h-6 w-6 sm:h-7 sm:w-7 fill-current" />
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={() => playerEngine.next()}
-              aria-label="Next track"
-              title="Next (N)"
-              className="touch-target flex h-12 w-12 items-center justify-center rounded-full text-white hover:bg-white/10 active:scale-90 transition-all"
-            >
-              <SkipForward className="h-5 w-5 fill-current" />
-            </button>
-            <button
-              type="button"
-              onClick={() => playerStore.cycleRepeat()}
-              aria-label={repeatLabel}
-              aria-pressed={repeat !== 'off'}
-              title={repeatLabel}
-              className={`touch-target flex h-10 w-10 items-center justify-center rounded-full transition-all active:scale-95 ${repeat !== 'off' ? 'bg-white text-black shadow-md' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}
-            >
-              {repeat === 'one' ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
-            </button>
-          </div>
-          <p className="mt-2 text-center text-[11px] font-medium text-white/35" role="status">
-            {shuffle ? 'Shuffle on • ' : ''}{repeatLabel}
-            {eng.playbackRate !== 1 ? ` • ${eng.playbackRate}x` : ''}
+          </h1>
+          <p className="mt-1.5 truncate text-[14px] font-semibold text-white/85 drop-shadow-[0_1px_10px_rgba(0,0,0,0.9)]">
+            {track.author}
+            {track.albumName ? ` — ${track.albumName}` : ''}
           </p>
-
-          {/* Volume + speed (desktop inline; mobile keeps volume in overflow) */}
-          <div className="mt-4 hidden items-center gap-2 md:flex">
-            <button
-              type="button"
-              onClick={() => playerEngine.toggleMute()}
-              aria-label={eng.muted ? 'Unmute' : 'Mute'}
-              className="touch-target flex h-9 w-9 items-center justify-center rounded-full text-white/70 hover:bg-white/10 hover:text-white transition-all active:scale-95"
-            >
-              {eng.muted || eng.volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-            </button>
-            <label className="sr-only" htmlFor="np-volume">Volume</label>
-            <input
-              id="np-volume"
-              type="range"
-              min={0}
-              max={100}
-              value={eng.muted ? 0 : eng.volume}
-              onChange={(e) => playerEngine.setVolume(Number(e.target.value))}
-              className="w-32 accent-white"
-            />
-            <div className="relative ml-auto">
-              <button
-                type="button"
-                onClick={() => setSpeedOpen((v) => !v)}
-                aria-label={`Playback speed ${eng.playbackRate}x`}
-                aria-expanded={speedOpen}
-                className="touch-target rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-1.5 text-xs font-bold text-white/80 hover:bg-white/15 transition-all active:scale-95"
-              >
-                {eng.playbackRate}x
-              </button>
-              {speedOpen && (
-                <div role="menu" aria-label="Playback speed" className="absolute bottom-10 right-0 z-30 w-32 overflow-hidden rounded-2xl border border-white/10 bg-[#141416] p-1.5 shadow-xl backdrop-blur-xl">
-                  {SPEEDS.map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={eng.playbackRate === s}
-                      onClick={() => {
-                        playerEngine.setPlaybackRate(s);
-                        setSpeedOpen(false);
-                      }}
-                      className={`block w-full rounded-xl px-3 py-2 text-left text-xs font-semibold transition-colors ${eng.playbackRate === s ? 'bg-white text-black font-bold' : 'text-white/80 hover:bg-white/10'}`}
-                    >
-                      {s}x{s === 1 ? ' (normal)' : ''}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Actions + lyrics */}
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Track actions">
-            <button
-              type="button"
-              onClick={toggleFav}
-              aria-label={isFav ? 'Unlike' : 'Like'}
-              aria-pressed={isFav}
-              className={`touch-target inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold transition-all active:scale-95 ${isFav ? 'bg-white text-black shadow-md' : 'border border-white/10 bg-white/[0.06] text-white/80 hover:bg-white/15'}`}
-            >
-              <Heart className={`h-3.5 w-3.5 ${isFav ? 'fill-current text-red-500' : ''}`} /> {isFav ? 'Liked' : 'Like'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setPickerOpen(true)}
-              className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs font-semibold text-white/80 hover:bg-white/15 transition-all active:scale-95"
-            >
-              <FolderPlus className="h-3.5 w-3.5" /> Add to Playlist
-            </button>
-            <button
-              type="button"
-              onClick={handleRadio}
-              className="touch-target inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-xs font-semibold text-white/80 hover:bg-white/15 transition-all active:scale-95"
-            >
-              <Radio className="h-3.5 w-3.5" /> Start Radio
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowLyrics((v) => !v)}
-              aria-expanded={showLyrics}
-              className={`touch-target inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition-all active:scale-95 ${showLyrics ? 'bg-white text-black shadow-md' : 'border border-white/10 bg-white/[0.06] text-white/80 hover:bg-white/15'}`}
-            >
-              <MicVocal className="h-3.5 w-3.5" /> Lyrics
-            </button>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setMoreOpen((v) => !v)}
-                aria-label="More track actions"
-                aria-expanded={moreOpen}
-                className="touch-target flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-white/80 hover:bg-white/15 transition-all active:scale-95"
-              >
-                <MoreVertical className="h-4 w-4" />
-              </button>
-              {moreOpen && (
-                <div role="menu" aria-label="More actions" className="absolute right-0 z-30 mt-1 w-52 overflow-hidden rounded-2xl border border-white/10 bg-[#141416] p-1.5 shadow-xl">
-                  <MenuRow icon={<Share2 className="h-4 w-4" />} label="Share" onClick={() => { setMoreOpen(false); void handleShare(); }} />
-                  {onNavigate && (
-                    <MenuRow icon={<Mic2 className="h-4 w-4" />} label="Open artist" onClick={() => { setMoreOpen(false); onNavigate('artist', track.author); }} />
-                  )}
-                  {onNavigate && track.albumId && (
-                    <MenuRow icon={<Disc3 className="h-4 w-4" />} label="Open album" onClick={() => { setMoreOpen(false); onNavigate('album', track.albumId!); }} />
-                  )}
-                  <div className="my-1 h-px bg-white/[0.06]" />
-                  <p className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-white/35">Speed (audio only)</p>
-                  <div className="grid grid-cols-3 gap-1 px-1.5 pb-1.5">
-                    {SPEEDS.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => {
-                          playerEngine.setPlaybackRate(s);
-                          setMoreOpen(false);
-                        }}
-                        aria-pressed={eng.playbackRate === s}
-                        className={`rounded-lg px-2 py-1.5 text-xs font-bold ${eng.playbackRate === s ? 'bg-white text-black' : 'bg-white/[0.06] text-white/70 hover:bg-white/15'}`}
-                      >
-                        {s}x
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-2 px-3 py-2 md:hidden">
-                    <Volume2 className="h-4 w-4 shrink-0 text-white/60" />
-                    <label className="sr-only" htmlFor="np-volume-m">Volume</label>
-                    <input
-                      id="np-volume-m"
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={eng.muted ? 0 : eng.volume}
-                      onChange={(e) => playerEngine.setVolume(Number(e.target.value))}
-                      className="w-full accent-white"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Lyrics panel (existing LyricsView — no duplicate fetching) */}
-          {showLyrics ? (
-            <div className="mt-4 max-h-[420px] overflow-y-auto rounded-[20px] border border-white/10 bg-black/30 p-4">
-              {lyrics.loading && !lyrics.plain && !lyrics.synced ? (
-                <p className="flex items-center gap-2 text-xs text-white/50" role="status">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading lyrics…
-                </p>
-              ) : (
-                <LyricsView
-                  synced={lyrics.synced}
-                  plain={lyrics.plain}
-                  isPlaying={eng.isPlaying}
-                  source={lyrics.source}
-                  loading={lyrics.loading}
-                  progress={eng.progress}
-                  duration={duration}
-                  onSeek={(s) => playerEngine.seek(s)}
-                  title={track.title}
-                  artist={track.author}
-                  trackId={track.id}
-                />
-              )}
-            </div>
-          ) : (
-            <div className="mt-4 rounded-[20px] border border-dashed border-white/10 bg-white/[0.02] p-4 text-xs leading-relaxed text-white/40">
-              Lyrics, Up Next suggestions and the full queue stay one tap away — open Lyrics for the synced
-              view or Queue to manage what plays next. Playback continues uninterrupted.
+          {(meta?.addedBy === 'radio' || meta?.addedBy === 'autoplay') && (
+            <div className="mt-2.5 flex justify-center" aria-label="Track provenance">
+              <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-[11px] font-bold text-black" title={reason || undefined}>
+                {meta.addedBy === 'autoplay' ? 'Autoplay' : 'Radio'}{reason && reason !== 'Radio' ? ` • ${reason}` : ''}
+              </span>
             </div>
           )}
-
-          {eng.error && (
-            <p role="alert" className="mt-3 text-xs font-medium text-amber-300">
-              {eng.error} — the engine skips failed tracks automatically; your queue is intact.
-            </p>
-          )}
         </div>
+      </main>
+
+      <footer className="mx-auto w-full max-w-[560px]">
+        <div className="rounded-[24px] border border-white/10 bg-black/30 p-4 shadow-[0_16px_48px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:p-5">
+          <PlayerControls durationSeconds={track.durationSeconds} accent={palette.primary} idPrefix="np" />
+        </div>
+
+        <div className="mt-2 grid grid-cols-4 gap-2" role="group" aria-label="Track actions">
+          <button
+            type="button"
+            onClick={toggleFav}
+            aria-label={isFav ? 'Unlike' : 'Like'}
+            aria-pressed={isFav}
+            className={`flex flex-col items-center gap-1 rounded-2xl border py-2.5 text-[10px] font-bold uppercase tracking-wider transition-all active:scale-95 ${isFav ? 'border-white bg-white text-black shadow-lg' : 'border-white/10 bg-white/[0.06] text-white/75 backdrop-blur hover:bg-white/10'}`}
+          >
+            <Heart className={`h-5 w-5 ${isFav ? 'fill-current text-red-500' : ''}`} /> Like
+          </button>
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            className="flex flex-col items-center gap-1 rounded-2xl border border-white/10 bg-white/[0.06] py-2.5 text-[10px] font-bold uppercase tracking-wider text-white/75 backdrop-blur transition-all hover:bg-white/10 active:scale-95"
+          >
+            <FolderPlus className="h-5 w-5" /> Add
+          </button>
+          <button
+            type="button"
+            onClick={handleRadio}
+            className="flex flex-col items-center gap-1 rounded-2xl border border-white/10 bg-white/[0.06] py-2.5 text-[10px] font-bold uppercase tracking-wider text-white/75 backdrop-blur transition-all hover:bg-white/10 active:scale-95"
+          >
+            <Radio className="h-5 w-5" /> Radio
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowLyrics((v) => !v)}
+            aria-expanded={showLyrics}
+            className={`flex flex-col items-center gap-1 rounded-2xl border py-2.5 text-[10px] font-bold uppercase tracking-wider transition-all active:scale-95 ${showLyrics ? 'border-white bg-white text-black shadow-lg' : 'border-white/10 bg-white/[0.06] text-white/75 backdrop-blur hover:bg-white/10'}`}
+          >
+            <MicVocal className="h-5 w-5" /> Lyrics
+          </button>
+        </div>
+
+        {showLyrics ? (
+          <div className="mt-2 max-h-[460px] overflow-y-auto rounded-[24px] border border-white/10 bg-black/40 p-5 shadow-[0_16px_48px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+            {lyrics.loading && !lyrics.plain && !lyrics.synced ? (
+              <p className="flex items-center gap-2 text-xs text-white/50" role="status">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading lyrics…
+              </p>
+            ) : (
+              <LyricsView
+                synced={lyrics.synced}
+                plain={lyrics.plain}
+                isPlaying={eng.isPlaying}
+                source={lyrics.source}
+                loading={lyrics.loading}
+                progress={eng.progress}
+                duration={duration}
+                onSeek={(s) => playerEngine.seek(s)}
+                title={track.title}
+                artist={track.author}
+                trackId={track.id}
+              />
+            )}
+          </div>
+        ) : null}
+
+        {eng.error && (
+          <p role="alert" className="mt-3 text-center text-xs font-medium text-amber-300">
+            {eng.error} — the engine skips failed tracks automatically; your queue is intact.
+          </p>
+        )}
+      </footer>
       </div>
 
       <AddToPlaylistModal

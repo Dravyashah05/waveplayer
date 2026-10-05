@@ -20,6 +20,7 @@ export const DEFAULT_PALETTE: ArtworkPalette = {
 };
 
 const cache = new Map<string, ArtworkPalette>();
+const inflight = new Map<string, Promise<ArtworkPalette>>();
 
 function luminance(r: number, g: number, b: number): number {
   return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
@@ -55,6 +56,18 @@ export async function extractPalette(artworkUrl: string): Promise<ArtworkPalette
   if (!artworkUrl) return DEFAULT_PALETTE;
   const hit = loadCached(artworkUrl);
   if (hit) return hit;
+  const pending = inflight.get(artworkUrl);
+  if (pending) return pending;
+  const request = extractPaletteUncached(artworkUrl);
+  inflight.set(artworkUrl, request);
+  try {
+    return await request;
+  } finally {
+    if (inflight.get(artworkUrl) === request) inflight.delete(artworkUrl);
+  }
+}
+
+async function extractPaletteUncached(artworkUrl: string): Promise<ArtworkPalette> {
   try {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -114,10 +127,14 @@ export async function extractPalette(artworkUrl: string): Promise<ArtworkPalette
     storeCached(artworkUrl, palette);
     return palette;
   } catch {
+    // Avoid retrying a rate limited or inaccessible cover every time the same
+    // artwork appears in multiple player surfaces during this session.
+    storeCached(artworkUrl, DEFAULT_PALETTE);
     return DEFAULT_PALETTE;
   }
 }
 
 export function clearPaletteCache(): void {
   cache.clear();
+  inflight.clear();
 }

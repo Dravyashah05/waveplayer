@@ -272,6 +272,21 @@ app.get('/api/ytmusic/song/:id', async (req, res) => {
 // Serverless budget: Vercel Hobby kills functions at ~10s, so the whole flow
 // must finish fast. YTMusic init + oEmbed run IN PARALLEL (not sequentially),
 // and every stage is tightly time-boxed.
+// Keep routine LRCLIB misses behind the API. A missing song is a normal result,
+// so the browser should receive JSON instead of logging LRCLIB's 404 response.
+app.get('/api/ytmusic/lyrics/search', async (req, res) => {
+  const track = String(req.query.track || '').trim().slice(0, 200);
+  const artist = String(req.query.artist || '').trim().slice(0, 200);
+  const duration = Number(req.query.duration || 0);
+  if (!track) return res.status(400).json({ synced: null, plain: null, source: null });
+  const result = await withTimeout(
+    fetchLrclibSynced(artist, track, '', Number.isFinite(duration) ? duration : 0),
+    6_000,
+    { synced: null, plain: null, source: null },
+  );
+  return res.json({ ...result, lyrics: result.plain });
+});
+
 app.get('/api/ytmusic/lyrics/:id', async (req,res)=>{
   const id=req.params.id;
   if (!/^[a-zA-Z0-9_-]{11}$/.test(id)) return res.status(400).json({ error: 'invalid videoId' });
@@ -350,6 +365,7 @@ app.get('/api/ytmusic/lyrics/:id', async (req,res)=>{
     res.json({ synced: null, plain: null, lyrics: null, source: null, artist: '', track: '', duration: 0 });
   }
 });
+
 
 app.get('/api/ytmusic/upnext/:id', async (req,res)=>{
   const id=req.params.id;

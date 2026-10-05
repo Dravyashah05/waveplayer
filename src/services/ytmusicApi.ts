@@ -341,84 +341,17 @@ async function searchLrcLibUncached(
   durationSec?: number
 ): Promise<{ synced: SyncedLine[] | null; plain: string[] | null; source: string | null } | null> {
   if (!trackTitle) return null;
-  const cleanTitle = trackTitle.replace(/\(.*?\)|\[.*?\]/g, '').trim();
-  // Auto-generated "Artist - Topic" channel names never match lyric credits.
-  const firstArtist = (artistName || '').split(/[,&/|]/)[0]?.replace(/\s+-\s+Topic\s*$/i, '').trim() || '';
-
-  // 1. Exact lookup
   try {
-    const params = new URLSearchParams({
-      track_name: cleanTitle || trackTitle,
-      artist_name: firstArtist || artistName || '',
-    });
-    if (durationSec && durationSec > 10) {
-      params.append('duration', String(Math.round(durationSec)));
-    }
-    const r = await fetch(`https://lrclib.net/api/get?${params.toString()}`, {
-      headers: { 'User-Agent': 'WavePlayer/1.0' },
-    });
-    if (r.ok) {
-      const d = await r.json();
-      if (d.syncedLyrics) {
-        const synced = parseLRC(d.syncedLyrics);
-        if (synced.length) {
-          return {
-            synced,
-            plain: d.plainLyrics ? d.plainLyrics.split('\n').map((s: string) => s.trim()).filter(Boolean) : null,
-            source: 'LRCLIB Synced',
-          };
-        }
-      }
-      if (d.plainLyrics) {
-        return {
-          synced: null,
-          plain: d.plainLyrics.split('\n').map((s: string) => s.trim()).filter(Boolean),
-          source: 'LRCLIB Plain',
-        };
-      }
-    }
-  } catch {}
-
-  // 2. Search fallback
-  try {
-    const q = `${cleanTitle} ${firstArtist}`.trim() || cleanTitle || trackTitle;
-    const r = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, {
-      headers: { 'User-Agent': 'WavePlayer/1.0' },
-    });
-    if (r.ok) {
-      const arr = await r.json();
-      if (Array.isArray(arr) && arr.length) {
-        let best = arr.find((x: any) => x.syncedLyrics) || arr[0];
-        if (durationSec && durationSec > 10) {
-          let bestDiff = Infinity;
-          for (const item of arr) {
-            if (!item.syncedLyrics && !item.plainLyrics) continue;
-            const diff = Math.abs((item.duration || 0) - durationSec);
-            if (diff < bestDiff) {
-              bestDiff = diff;
-              best = item;
-            }
-          }
-        }
-        if (best?.syncedLyrics) {
-          const synced = parseLRC(best.syncedLyrics);
-          if (synced.length) {
-            return {
-              synced,
-              plain: best.plainLyrics ? best.plainLyrics.split('\n').map((s: string) => s.trim()).filter(Boolean) : null,
-              source: 'LRCLIB Synced',
-            };
-          }
-        }
-        if (best?.plainLyrics) {
-          return {
-            synced: null,
-            plain: best.plainLyrics.split('\n').map((s: string) => s.trim()).filter(Boolean),
-            source: 'LRCLIB Plain',
-          };
-        }
-      }
-    }
+    const params = new URLSearchParams({ track: trackTitle, artist: artistName });
+    if (durationSec && durationSec > 10) params.set('duration', String(Math.round(durationSec)));
+    const response = await fetch(`${YT_BASE}/lyrics/search?${params}`, { headers: { Accept: 'application/json' } });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return {
+      synced: Array.isArray(data.synced) ? data.synced : null,
+      plain: Array.isArray(data.plain) ? data.plain : null,
+      source: typeof data.source === 'string' ? data.source : null,
+    };
   } catch {}
 
   return null;

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Loader2,
   Pause,
@@ -8,13 +9,9 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
-  Volume2,
-  VolumeX,
 } from 'lucide-react';
 import { playerEngine, usePlayerEngine } from '../services/playerEngine';
 import { playerStore } from '../services/playerStore';
-
-const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 function fmt(s: number): string {
   if (!Number.isFinite(s) || s < 0) s = 0;
@@ -35,10 +32,10 @@ interface PlayerControlsProps {
 }
 
 /**
- * Standalone playback controls: progress seek bar, transport cluster
- * (shuffle / prev / play / next / repeat), status line and desktop
- * volume + speed row. Subscribes to the player stores itself, so any
- * surface (Now Playing page, fullscreen overlay, …) can drop it in.
+ * Standalone playback deck: slim progress row + five-way transport
+ * (shuffle / prev / play / next / repeat). Subscribes to the player
+ * stores itself — drop it on any surface. Volume + speed live with the
+ * host layout so every screen places them consistently.
  */
 export const PlayerControls: React.FC<PlayerControlsProps> = ({
   durationSeconds,
@@ -49,7 +46,6 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
   const eng = usePlayerEngine();
   const [shuffle, setShuffle] = useState(() => playerStore.shuffle);
   const [repeat, setRepeat] = useState(() => playerStore.repeat);
-  const [speedOpen, setSpeedOpen] = useState(false);
 
   useEffect(() => {
     const unsub = playerStore.subscribe(() => {
@@ -67,142 +63,110 @@ export const PlayerControls: React.FC<PlayerControlsProps> = ({
   const repeatLabel = repeat === 'one' ? 'Repeat one' : repeat === 'all' ? 'Repeat queue' : 'Repeat off';
 
   return (
-    <section aria-label="Playback controls" className={`w-full ${className}`}>
-      {/* Progress — chunky glass bar */}
-      <div className="w-full rounded-2xl border border-white/10 bg-white/[0.05] p-3.5 backdrop-blur-xl">
-        <div className="flex items-center gap-3">
-          <span className="w-10 text-right text-[11px] font-semibold tabular-nums text-white/60">{fmt(eng.progress)}</span>
-          <div className="relative flex h-6 flex-1 items-center">
-            <div className="relative h-[6px] w-full overflow-hidden rounded-full bg-white/15">
-              <div className="h-full rounded-full transition-[width] duration-150" style={{ width: `${seekMax > 0 ? (seekValue / seekMax) * 100 : 0}%`, background: accent }} />
-            </div>
-            <input
-              id={`${idPrefix}-seek`}
-              type="range"
-              min={0}
-              max={seekMax}
-              value={seekValue}
-              onChange={(e) => playerEngine.seek(Number(e.target.value))}
-              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-              style={{ margin: 0 }}
-              aria-label="Seek"
-              aria-valuetext={`${fmt(eng.progress)} of ${fmt(duration)}`}
+    <section aria-label="Playback controls" className={`w-full select-none ${className}`}>
+      {/* Progress */}
+      <div className="flex items-center gap-3">
+        <span className="w-10 shrink-0 text-right text-[10px] font-semibold tabular-nums text-white/50">{fmt(eng.progress)}</span>
+        <div className="relative flex h-8 flex-1 items-center">
+          <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-white/15">
+            <div
+              className="h-full rounded-full transition-[width] duration-150"
+              style={{ width: `${seekMax > 0 ? (seekValue / seekMax) * 100 : 0}%`, background: accent }}
             />
           </div>
-          <span className="w-10 text-[11px] font-semibold tabular-nums text-white/60">{fmt(duration)}</span>
+          <input
+            id={`${idPrefix}-seek`}
+            type="range"
+            min={0}
+            max={seekMax}
+            value={seekValue}
+            onChange={(e) => playerEngine.seek(Number(e.target.value))}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+            style={{ margin: 0 }}
+            aria-label="Seek"
+            aria-valuetext={`${fmt(eng.progress)} of ${fmt(duration)}`}
+          />
         </div>
+        <span className="w-10 shrink-0 text-[10px] font-semibold tabular-nums text-white/50">{fmt(duration)}</span>
       </div>
 
-      {/* Transport — 5-cluster */}
-      <div className="mt-4 flex w-full items-center justify-between gap-2" role="group" aria-label="Transport">
-        <button
+      {/* Transport */}
+      <div className="mt-1 flex w-full items-center justify-between gap-1" role="group" aria-label="Transport">
+        <motion.button
           type="button"
+          whileTap={{ scale: 0.85 }}
           onClick={() => playerStore.toggleShuffle()}
           aria-label={shuffle ? 'Shuffle on' : 'Shuffle off'}
           aria-pressed={shuffle}
           title="Shuffle"
-          className={`flex h-11 w-11 items-center justify-center rounded-full border transition-all active:scale-95 ${shuffle ? 'border-white bg-white text-black shadow-lg' : 'border-white/10 bg-white/[0.06] text-white/60 hover:text-white'}`}
+          className={`flex h-11 w-11 items-center justify-center rounded-full transition-colors ${shuffle ? 'bg-white text-black' : 'text-white/55 hover:bg-white/10 hover:text-white'}`}
         >
           <Shuffle className="h-[18px] w-[18px]" />
-        </button>
-        <div className="flex items-center gap-2">
-          <button
+        </motion.button>
+        <div className="flex items-center gap-1 sm:gap-2">
+          <motion.button
             type="button"
+            whileTap={{ scale: 0.85 }}
             onClick={() => playerEngine.prev()}
             aria-label="Previous track"
             title="Previous (P)"
-            className="flex h-12 w-12 items-center justify-center rounded-full text-white transition-all hover:bg-white/10 active:scale-90"
+            className="flex h-12 w-12 items-center justify-center rounded-full text-white transition-colors hover:bg-white/10"
           >
-            <SkipBack className="h-5 w-5 fill-current" />
-          </button>
-          <button
+            <SkipBack className="h-[22px] w-[22px] fill-current" />
+          </motion.button>
+          <motion.button
             type="button"
+            whileTap={{ scale: 0.9 }}
             onClick={() => playerEngine.toggle()}
             aria-label={eng.isPlaying ? 'Pause' : 'Play'}
             title="Play/Pause (Space)"
-            className="flex h-16 w-16 items-center justify-center rounded-full text-black shadow-[0_16px_40px_rgba(0,0,0,0.5)] transition-all hover:scale-105 active:scale-95"
+            className="mx-1 flex h-[60px] w-[60px] items-center justify-center rounded-full text-black transition-transform hover:scale-[1.03]"
             style={{ background: accent }}
           >
             {eng.isBuffering ? (
-              <Loader2 className="h-7 w-7 animate-spin" />
-            ) : eng.isPlaying ? (
-              <Pause className="h-7 w-7 fill-current" />
+              <Loader2 className="h-8 w-8 animate-spin" />
             ) : (
-              <Play className="ml-1 h-7 w-7 fill-current" />
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={eng.isPlaying ? 'pause' : 'play'}
+                  initial={{ scale: 0.5, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.5, opacity: 0 }}
+                  transition={{ duration: 0.16 }}
+                  className="grid place-items-center"
+                >
+                  {eng.isPlaying ? (
+                  <Pause className="h-7 w-7 fill-current" />
+                  ) : (
+                  <Play className="ml-1 h-7 w-7 fill-current" />
+                  )}
+                </motion.span>
+              </AnimatePresence>
             )}
-          </button>
-          <button
+          </motion.button>
+          <motion.button
             type="button"
+            whileTap={{ scale: 0.85 }}
             onClick={() => playerEngine.next()}
             aria-label="Next track"
             title="Next (N)"
-            className="flex h-12 w-12 items-center justify-center rounded-full text-white transition-all hover:bg-white/10 active:scale-90"
+            className="flex h-12 w-12 items-center justify-center rounded-full text-white transition-colors hover:bg-white/10"
           >
-            <SkipForward className="h-5 w-5 fill-current" />
-          </button>
+            <SkipForward className="h-[22px] w-[22px] fill-current" />
+          </motion.button>
         </div>
-        <button
+        <motion.button
           type="button"
+          whileTap={{ scale: 0.85 }}
           onClick={() => playerStore.cycleRepeat()}
           aria-label={repeatLabel}
           aria-pressed={repeat !== 'off'}
           title={repeatLabel}
-          className={`relative flex h-11 w-11 items-center justify-center rounded-full border transition-all active:scale-95 ${repeat !== 'off' ? 'border-white bg-white text-black shadow-lg' : 'border-white/10 bg-white/[0.06] text-white/60 hover:text-white'}`}
+          className={`relative flex h-11 w-11 items-center justify-center rounded-full transition-colors ${repeat !== 'off' ? 'bg-white text-black' : 'text-white/55 hover:bg-white/10 hover:text-white'}`}
         >
           {repeat === 'one' ? <Repeat1 className="h-[18px] w-[18px]" /> : <Repeat className="h-[18px] w-[18px]" />}
           {repeat === 'one' && <span className="absolute -right-0.5 -top-0.5 grid h-4 w-4 place-items-center rounded-full bg-black text-[9px] font-black text-white ring-1 ring-white/30">1</span>}
-        </button>
-      </div>
-      {/* Volume + speed (desktop inline) */}
-      <div className="mt-4 hidden items-center gap-2 md:flex">
-        <button
-          type="button"
-          onClick={() => playerEngine.toggleMute()}
-          aria-label={eng.muted ? 'Unmute' : 'Mute'}
-          className="touch-target flex h-9 w-9 items-center justify-center rounded-full text-white/70 hover:bg-white/10 hover:text-white transition-all active:scale-95"
-        >
-          {eng.muted || eng.volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-        </button>
-        <label className="sr-only" htmlFor={`${idPrefix}-volume`}>Volume</label>
-        <input
-          id={`${idPrefix}-volume`}
-          type="range"
-          min={0}
-          max={100}
-          value={eng.muted ? 0 : eng.volume}
-          onChange={(e) => playerEngine.setVolume(Number(e.target.value))}
-          className="w-32 accent-white"
-        />
-        <div className="relative ml-auto">
-          <button
-            type="button"
-            onClick={() => setSpeedOpen((v) => !v)}
-            aria-label={`Playback speed ${eng.playbackRate}x`}
-            aria-expanded={speedOpen}
-            className="touch-target rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-1.5 text-xs font-bold text-white/80 hover:bg-white/15 transition-all active:scale-95"
-          >
-            {eng.playbackRate}x
-          </button>
-          {speedOpen && (
-            <div role="menu" aria-label="Playback speed" className="absolute bottom-10 right-0 z-30 w-32 overflow-hidden rounded-2xl border border-white/10 bg-[#141416] p-1.5 shadow-xl backdrop-blur-xl">
-              {SPEEDS.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={eng.playbackRate === s}
-                  onClick={() => {
-                    playerEngine.setPlaybackRate(s);
-                    setSpeedOpen(false);
-                  }}
-                  className={`block w-full rounded-xl px-3 py-2 text-left text-xs font-semibold transition-colors ${eng.playbackRate === s ? 'bg-white text-black font-bold' : 'text-white/80 hover:bg-white/10'}`}
-                >
-                  {s}x{s === 1 ? ' (normal)' : ''}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        </motion.button>
       </div>
     </section>
   );

@@ -160,6 +160,7 @@ body #root::before {
 
 * { -webkit-tap-highlight-color: transparent; }
 button, a { transition: all 180ms var(--ease-ios); }
+button:active:not(:disabled), a:active { filter: brightness(1.08); }
 
 .scrollbar-none { scrollbar-width: none; -ms-overflow-style: none; }
 .scrollbar-none::-webkit-scrollbar { display: none; }

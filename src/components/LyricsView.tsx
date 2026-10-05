@@ -22,6 +22,7 @@ interface Props {
 
 export const LyricsView: React.FC<Props> = ({ synced, plain, isPlaying, loading, onSeek, progress, source, title, artist, trackId }) => {
   const lineRefs = useRef<(HTMLParagraphElement | HTMLButtonElement | null)[]>([]);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const overrideTimer = useRef<number | null>(null);
   const programmaticScroll = useRef(false);
   const programmaticScrollTimer = useRef<number | null>(null);
@@ -40,16 +41,29 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, isPlaying, loading,
     return unsub;
   }, []);
 
-  useEffect(() => {
-    if (!scrollEnabled || !isPlaying || activeIndex < 0) return;
+  // Keep the focused line pinned to the vertical center of the lyrics
+  // panel. Scrolls the panel itself (never the page) so the active line
+  // stays in focus whether playing or paused.
+  const centerActiveLine = (smooth: boolean) => {
+    const container = scrollRef.current;
+    const el = activeIndex >= 0 ? lineRefs.current[activeIndex] : null;
+    if (!container || !el) return;
+    const containerRect = container.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const target = container.scrollTop + (elRect.top - containerRect.top) - container.clientHeight / 2 + elRect.height / 2;
     programmaticScroll.current = true;
-    lineRefs.current[activeIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    container.scrollTo({ top: Math.max(0, target), behavior: smooth ? 'smooth' : 'auto' });
     if (programmaticScrollTimer.current != null) window.clearTimeout(programmaticScrollTimer.current);
     programmaticScrollTimer.current = window.setTimeout(() => {
       programmaticScroll.current = false;
       programmaticScrollTimer.current = null;
     }, 700);
-  }, [activeIndex, isPlaying, scrollEnabled]);
+  };
+
+  useEffect(() => {
+    if (!scrollEnabled || activeIndex < 0) return;
+    centerActiveLine(true);
+  }, [activeIndex, scrollEnabled]);
 
   useEffect(() => {
     if (overrideTimer.current != null) window.clearTimeout(overrideTimer.current);
@@ -82,15 +96,7 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, isPlaying, loading,
     overrideTimer.current = null;
     setManualOverride(false);
     setResumeRequested(true);
-    if (activeIndex >= 0) {
-      programmaticScroll.current = true;
-      lineRefs.current[activeIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      if (programmaticScrollTimer.current != null) window.clearTimeout(programmaticScrollTimer.current);
-      programmaticScrollTimer.current = window.setTimeout(() => {
-        programmaticScroll.current = false;
-        programmaticScrollTimer.current = null;
-      }, 700);
-    }
+    if (activeIndex >= 0) centerActiveLine(true);
   };
 
   const onManualScroll = () => {
@@ -126,6 +132,7 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, isPlaying, loading,
         </button>
       )}
       <div
+        ref={scrollRef}
         className="min-h-0 flex-1 overflow-y-auto scrollbar-none scroll-smooth"
         onWheel={pauseAutoScroll}
         onTouchMove={pauseAutoScroll}
@@ -136,7 +143,7 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, isPlaying, loading,
         tabIndex={0}
         aria-label="Lyrics"
       >
-        <div className="px-2 py-8 sm:px-4 lg:px-6">
+        <div className="px-5 py-8 sm:px-8 lg:px-10">
           {isSynced && activeIndex === -1 && <p className="py-8 text-center text-[12px] font-medium uppercase tracking-widest text-white/25">Intro — lyrics follow playback</p>}
           {lines.map((line, i) => {
             const isActive = i === activeIndex;
@@ -148,14 +155,14 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, isPlaying, loading,
             const content = (
               <>
                 {words ? words.map((word, wordIndex) => (
-                  <span key={wordIndex} className={`transition-colors duration-200 ${wordIndex === activeWord ? 'text-white drop-shadow-[0_0_18px_rgba(255,255,255,0.65)]' : wordIndex < activeWord ? 'text-white/85' : 'text-white/45'}`}>
+                  <span key={wordIndex} className={`transition-colors duration-200 ${wordIndex === activeWord ? 'text-white' : wordIndex < activeWord ? 'text-white/85' : 'text-white/45'}`}>
                     {word.text}{wordIndex < words.length - 1 ? ' ' : ''}
                   </span>
                 )) : line.text || <span className="opacity-30">—</span>}
               </>
             );
-            const sharedClass = `block w-full break-words py-3 text-left text-balance tracking-[-0.04em] transition-[opacity,transform,color] duration-300 ${isActive ? 'py-4 sm:py-5' : ''} ${canSeek ? 'cursor-pointer' : 'cursor-default'}`;
-            const sharedStyle = { opacity, transform: isActive ? 'scale(1)' : `scale(${distance === 1 ? 0.985 : 0.96})`, textShadow: isActive ? '0 4px 32px rgba(0,0,0,0.85)' : undefined };
+            const sharedClass = `block w-full break-words py-2.5 text-left text-balance tracking-[-0.025em] transition-[opacity,transform,color] duration-300 ${isActive ? 'py-3.5 sm:py-4' : ''} ${canSeek ? 'cursor-pointer' : 'cursor-default'}`;
+            const sharedStyle = { opacity, transform: isActive ? 'scale(1)' : `scale(${distance === 1 ? 0.99 : 0.97})` };
 
             return canSeek ? (
               <button
@@ -163,7 +170,7 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, isPlaying, loading,
                 ref={(el) => { lineRefs.current[i] = el; }}
                 type="button"
                 onClick={() => onSeek(line.start!)}
-                className={`${sharedClass} ${isActive ? 'text-[27px] font-black leading-[1.15] text-white min-[400px]:text-[32px] sm:text-[48px] lg:text-[56px]' : 'text-[17px] font-semibold leading-[1.6] text-white min-[400px]:text-[19px] sm:text-[22px] lg:text-[26px]'}`}
+                className={`${sharedClass} ${isActive ? 'text-[30px] font-extrabold leading-[1.2] text-white sm:text-[38px] lg:text-[46px]' : 'text-[16px] font-medium leading-[1.55] text-white sm:text-[19px] lg:text-[21px]'}`}
                 style={sharedStyle}
                 aria-current={isActive ? 'true' : undefined}
                 aria-label={`Seek to lyric: ${line.text}`}
@@ -172,7 +179,7 @@ export const LyricsView: React.FC<Props> = ({ synced, plain, isPlaying, loading,
               <p
                 key={`${i}-${line.text.slice(0, 24)}`}
                 ref={(el) => { lineRefs.current[i] = el; }}
-                className={`${sharedClass} ${isActive ? 'text-[27px] font-black leading-[1.15] text-white min-[400px]:text-[32px] sm:text-[48px] lg:text-[56px]' : 'text-[17px] font-semibold leading-[1.6] text-white min-[400px]:text-[19px] sm:text-[22px] lg:text-[26px]'}`}
+                className={`${sharedClass} ${isActive ? 'text-[30px] font-extrabold leading-[1.2] text-white sm:text-[38px] lg:text-[46px]' : 'text-[16px] font-medium leading-[1.55] text-white sm:text-[19px] lg:text-[21px]'}`}
                 style={sharedStyle}
               >{content}</p>
             );

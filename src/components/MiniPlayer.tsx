@@ -1,10 +1,11 @@
 import React, { memo, useState, useEffect } from 'react';
 import { motion, PanInfo } from 'motion/react';
-import { Heart, Loader2, Pause, Play, SkipBack, SkipForward, ListMusic } from 'lucide-react';
+import { Heart, Loader2, Pause, Play, SkipForward, ListMusic } from 'lucide-react';
 import { Track } from '../types';
 import { MarqueeText } from './MarqueeText';
 import { ArtworkImage } from './ArtworkImage';
 import { settingsStore } from '../services/settingsStore';
+import { playerStore } from '../services/playerStore';
 
 interface MiniPlayerProps {
   track: Track;
@@ -44,6 +45,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
 }) => {
   const [glassIntensity, setGlassIntensity] = useState(() => settingsStore.get().glassIntensity);
   const [glassEnabled, setGlassEnabled] = useState(() => settingsStore.get().glassEnabled);
+  const [queueCount, setQueueCount] = useState(() => playerStore.queue().length);
 
   useEffect(() => {
     const unsub = settingsStore.subscribe(() => {
@@ -51,6 +53,13 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
       setGlassEnabled(settingsStore.get().glassEnabled);
     });
     return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsubQueue = playerStore.subscribe(() => setQueueCount(playerStore.queue().length));
+    return () => {
+      unsubQueue();
+    };
   }, []);
 
   const safeDuration = duration > 1 ? duration : 180;
@@ -85,6 +94,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
       exit={{ y: 20, opacity: 0 }}
       transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
       onPanEnd={handlePanEnd}
+      whileTap={{ scale: 0.99 }}
     >
       <div
         role="button"
@@ -113,11 +123,11 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
       >
         {/* Top Progress Line Indicator */}
         <div
-          className="pointer-events-none absolute inset-x-0 top-0 h-[2.5px] bg-white/[0.08]"
+          className="pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-white/[0.08]"
           aria-hidden
         >
           <div
-            className="h-full bg-white transition-[width] duration-200 ease-linear rounded-r-full shadow-[0_0_8px_rgba(255,255,255,0.5)]"
+            className="h-full bg-gradient-to-r from-white/70 to-white transition-[width] duration-200 ease-linear rounded-r-full shadow-[0_0_10px_rgba(255,255,255,0.65)]"
             style={{ width: `${pct}%` }}
           />
         </div>
@@ -171,7 +181,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
             title={isFav ? 'Liked' : 'Like'}
             className={`touch-target h-9 w-9 rounded-full flex items-center justify-center transition-all active:scale-90 ${
               isFav
-                ? 'text-red-400 hover:text-red-300'
+                ? 'text-red-400 hover:text-red-300 drop-shadow-[0_0_8px_rgba(248,113,113,0.55)]'
                 : 'text-white/60 hover:text-white hover:bg-white/10'
             }`}
           >
@@ -223,9 +233,14 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = memo(({
               }}
               aria-label="Open queue"
               title="Queue"
-              className="hidden min-[420px]:flex touch-target h-9 w-9 rounded-full items-center justify-center text-white/60 hover:text-white hover:bg-white/10 active:scale-90 transition-all"
+              className="hidden min-[420px]:flex touch-target h-9 w-9 rounded-full items-center justify-center text-white/60 hover:text-white hover:bg-white/10 active:scale-90 transition-all relative"
             >
               <ListMusic className="h-4 w-4" />
+              {queueCount > 0 && (
+                <span className="absolute -top-1 -right-1 grid h-4 min-w-[16px] place-items-center rounded-full bg-white px-1 text-[10px] font-black text-black ring-2 ring-black/40">
+                  {queueCount > 99 ? '99+' : queueCount}
+                </span>
+              )}
             </button>
           )}
         </div>

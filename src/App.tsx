@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState, useRef, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { X, Loader2 } from 'lucide-react';
 import { AppHeader } from './components/layout/AppHeader';
 import { DesktopSidebar } from './components/layout/DesktopSidebar';
@@ -79,6 +79,8 @@ function PageFallback() {
 }
 
 function AppContent() {
+  const reduceMotion = useReducedMotion();
+
   useEffect(() => {
     perfMark('shell:ready');
     perfMeasure('startup', 'bootstrap', 'shell:ready');
@@ -384,11 +386,11 @@ function AppContent() {
             : 'w-full max-w-7xl mx-auto px-3.5 min-[400px]:px-4 sm:px-6 lg:px-8 pt-3 sm:pt-6 pb-[calc(148px+env(safe-area-inset-bottom))] lg:pb-[110px]'}>
             <AnimatePresence mode="wait">
               <motion.div
-                key={page}
-                initial={{ opacity: 0, y: 6 }}
+                key={`${page}:${pageParam || ''}`}
+                initial={reduceMotion ? false : { opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                exit={reduceMotion ? undefined : { opacity: 0, y: -6 }}
+                transition={{ duration: reduceMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
               >
                 <Suspense fallback={<PageFallback />}>
                   <RouteBoundary pageKey={`${page}:${pageParam || ''}`}>

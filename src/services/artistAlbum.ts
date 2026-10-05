@@ -5,7 +5,7 @@ import {
   searchSaavnAlbums,
   searchSaavnArtists,
 } from './saavnApi';
-import { getAlbumDetails, getYTMusicArtist } from './ytmusicApi';
+import { getAlbumDetails, getYTMusicArtist, ytmusicSearch } from './ytmusicApi';
 import {
   deduplicateAlbums,
   deduplicateArtists,
@@ -387,12 +387,36 @@ export async function fetchArtistDetail(
     return cached;
   }
 
-  const [saavnRes, ytRes] = await Promise.allSettled([
+  let [saavnRes, ytRes] = await Promise.allSettled([
     withTimeout(getSaavnArtistDetails(cleanId)),
     withTimeout(getYTMusicArtist(cleanId)),
   ]);
-  const saavnData = saavnRes.status === 'fulfilled' ? saavnRes.value : null;
-  const ytData = ytRes.status === 'fulfilled' ? ytRes.value : null;
+  let saavnData = saavnRes.status === 'fulfilled' ? saavnRes.value : null;
+  let ytData = ytRes.status === 'fulfilled' ? ytRes.value : null;
+
+  // Callers may have only an artist name (for example, track metadata). The
+  // detail endpoints require provider IDs, so resolve an exact name match first.
+  if (!saavnData?.artist && !ytData?.artist) {
+    const [saavnSearchRes, ytSearchRes] = await Promise.allSettled([
+      withTimeout(searchSaavnArtists(cleanId, 1, 10)),
+      withTimeout(ytmusicSearch(cleanId, 'artists')),
+    ]);
+    const saavnMatch = saavnSearchRes.status === 'fulfilled'
+      ? saavnSearchRes.value.artists?.find((artist) => artistIdentity(artist.name) === artistIdentity(cleanId) && artist.artistId !== cleanId)
+      : undefined;
+    const ytMatch = ytSearchRes.status === 'fulfilled'
+      ? ytSearchRes.value.artists?.find((artist) => artistIdentity(artist.name) === artistIdentity(cleanId) && artist.artistId !== cleanId)
+      : undefined;
+
+    if (saavnMatch?.artistId || ytMatch?.artistId) {
+      [saavnRes, ytRes] = await Promise.allSettled([
+        saavnMatch?.artistId ? withTimeout(getSaavnArtistDetails(saavnMatch.artistId)) : Promise.resolve(null),
+        ytMatch?.artistId ? withTimeout(getYTMusicArtist(ytMatch.artistId)) : Promise.resolve(null),
+      ]);
+      saavnData = saavnRes.status === 'fulfilled' ? saavnRes.value : null;
+      ytData = ytRes.status === 'fulfilled' ? ytRes.value : null;
+    }
+  }
 
   const rawSongs: Track[] = [];
   const rawAlbums: Album[] = [];

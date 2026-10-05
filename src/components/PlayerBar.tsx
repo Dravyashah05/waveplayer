@@ -30,8 +30,7 @@ import {
 } from 'lucide-react';
 import { Suspense, lazy } from 'react';
 import { Track } from '../types';
-import { SyncedLine, getLyrics, searchLrcLib } from '../services/ytmusicApi';
-import { getSaavnLyrics } from '../services/saavnApi';
+import { useLyrics } from '../hooks/useLyrics';
 // Fullscreen-only surfaces split out of the initial chunk; the dock and
 // transport stay eager. Fallbacks are inline spinners (never layout shifts).
 const LyricsView = lazy(() => import('./LyricsView').then((m) => ({ default: m.LyricsView })));
@@ -124,10 +123,7 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
   const track = current;
   const [fullscreen, setFullscreen] = useState(false);
 
-  const [plainLyrics, setPlainLyrics] = useState<string[] | null>(null);
-  const [syncedLyrics, setSyncedLyrics] = useState<SyncedLine[] | null>(null);
-  const [lyricsSource, setLyricsSource] = useState<string | null>(null);
-  const [lyricsLoading, setLyricsLoading] = useState(false);
+  const { plain: plainLyrics, synced: syncedLyrics, source: lyricsSource, loading: lyricsLoading } = useLyrics(track);
 
   const [isFav, setIsFav] = useState(() => (track ? playerStore.isFav(track.id) : false));
   const [shuffle, setShuffle] = useState(() => playerStore.shuffle);
@@ -182,72 +178,6 @@ export const PlayerBar: React.FC<Props> = ({ onOpenQueue, onOpenNowPlaying }) =>
   }, [error]);
 
   // (playback engine lives in services/playerEngine.ts)
-
-  // Lyrics fetching
-  useEffect(() => {
-    if (!track?.id) {
-      setPlainLyrics(null);
-      setSyncedLyrics(null);
-      setLyricsSource(null);
-      return;
-    }
-    let cancelled = false;
-    setLyricsLoading(true);
-    setPlainLyrics(null);
-    setSyncedLyrics(null);
-    setLyricsSource(null);
-
-    const loadLyrics = async () => {
-      // 1. JioSaavn official lyrics
-      if (track.source === 'saavn' || track.lyricsId || track.hasLyrics || !/^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
-        try {
-          const res = await getSaavnLyrics(track.lyricsId || track.id);
-          if (!cancelled && res?.lyrics) {
-            setPlainLyrics(
-              res.lyrics
-                .split('\n')
-                .map((l) => l.trim())
-                .filter(Boolean)
-            );
-            setLyricsSource('JioSaavn Official');
-            setLyricsLoading(false);
-            return;
-          }
-        } catch {}
-      }
-
-      // 2. YouTube Music lyrics endpoint ONLY if track.id is a valid 11-character video ID
-      if (/^[a-zA-Z0-9_-]{11}$/.test(track.id)) {
-        try {
-          const res = await getLyrics(track.id);
-          if (!cancelled && res && (res.synced?.length || res.plain?.length)) {
-            setSyncedLyrics(res.synced);
-            setPlainLyrics(res.plain);
-            setLyricsSource(res.source || 'YouTube Music');
-            setLyricsLoading(false);
-            return;
-          }
-        } catch {}
-      }
-
-      // 3. LRCLIB Synced / Plain lyrics search fallback by title & artist
-      try {
-        const lrc = await searchLrcLib(track.title, track.author, track.durationSeconds);
-        if (!cancelled && lrc && (lrc.synced?.length || lrc.plain?.length)) {
-          setSyncedLyrics(lrc.synced);
-          setPlainLyrics(lrc.plain);
-          setLyricsSource(lrc.source || 'LRCLIB');
-        }
-      } catch {} finally {
-        if (!cancelled) setLyricsLoading(false);
-      }
-    };
-
-    loadLyrics();
-    return () => {
-      cancelled = true;
-    };
-  }, [track?.id]);
 
   // Playback controls — thin wrappers over the engine (analytics live in engine/store).
   // Stable references so the memoized MiniPlayer skips progress-tick re-renders

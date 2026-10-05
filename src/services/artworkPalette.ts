@@ -73,10 +73,16 @@ async function extractPaletteUncached(artworkUrl: string): Promise<ArtworkPalett
     img.crossOrigin = 'anonymous';
     img.decoding = 'async';
     await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error('artwork load failed'));
+      const timeout = setTimeout(() => reject(new Error('artwork timeout')), 6000);
+      img.onload = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+      img.onerror = () => {
+        clearTimeout(timeout);
+        reject(new Error('artwork load failed'));
+      };
       img.src = artworkUrl;
-      setTimeout(() => reject(new Error('artwork timeout')), 6000);
     });
     const size = 48;
     const canvas = document.createElement('canvas');
